@@ -1,0 +1,41 @@
+# Carpetas de navegadores Chrome
+.chrome_dian_*/
+
+# Archivos de descarga
+facturas_pdfs_descargados/
+*.pdf
+
+# Archivos de datos sensibles/ejecución
+checkpoint_descarga.json
+mapping_cufes_pdfs.json
+Facturas_Completas_*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
