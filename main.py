@@ -15,7 +15,7 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 
 # === MÓDULOS PROPIOS ===
 from config import cargar_settings
-from utils import log
+from utils import log, crear_logger
 from core import extraer_datos_pdf, generar_excel_final
 
 # === CONFIGURACIÓN ===
@@ -309,7 +309,7 @@ def inicializar_navegador(nav_id):
     co.set_argument('--no-sandbox')
     co.set_argument('--disable-dev-shm-usage')
     co.set_argument('--disable-gpu')
-    co.set_argument('--window-size=400,300')
+    co.set_argument('--window-size=800,600')
     co.set_argument(f'--user-data-dir={user_data}')
     co.set_argument('--disable-blink-features=AutomationControlled')
     
@@ -714,6 +714,16 @@ def guardar_progreso_parcial():
 
 def main():
     import sys
+    # Configurar logging a archivo
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    archivo_log = f'logs/ejecucion_{timestamp}.log'
+    os.makedirs('logs', exist_ok=True)
+    
+    # Configurar el logger global
+    from utils import obtener_logger
+    logger_global = obtener_logger()
+    logger_global.configurar_archivo(archivo_log)
+    log(0, f"📄 Log guardándose en: {archivo_log}", "INFO")
     
     # Permitir archivo como argumento: python3 main.py archivo.xlsx
     archivo_cufes = sys.argv[1] if len(sys.argv) > 1 else 'cufes_test.txt'

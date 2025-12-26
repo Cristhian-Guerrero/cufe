@@ -48,3 +48,4 @@ main_v2.py
 main_v3.py
 .~lock.*
 test_validacion.txt
+logs/*.log
