@@ -1,0 +1,48 @@
+{
+  "dian": {
+    "url": "https://catalogo-vpfe.dian.gov.co/User/SearchDocument",
+    "timeout_carga_pagina": 30,
+    "timeout_descarga_pdf": 60
+  },
+  
+  "navegadores": {
+    "cantidad_paralela": 10,
+    "headless": false,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  },
+  
+  "descarga": {
+    "max_reintentos": 2,
+    "carpeta_pdfs": "facturas_pdfs_descargados",
+    "archivo_mapping": "mapping_cufes_pdfs.json",
+    "archivo_checkpoint": "checkpoint_descarga.json"
+  },
+  
+  "excel": {
+    "prefijo_archivo": "Facturas_Completas",
+    "incluir_timestamp": true,
+    "formato_fecha": "%Y%m%d_%H%M%S"
+  },
+  
+  "logs": {
+    "nivel": "INFO",
+    "guardar_archivo": false,
+    "archivo_log": "cufe_automation.log",
+    "colores": {
+      "INFO": "\\u001b[94m",
+      "OK": "\\u001b[92m",
+      "WARN": "\\u001b[93m",
+      "ERROR": "\\u001b[91m",
+      "DEBUG": "\\u001b[96m",
+      "CRIT": "\\u001b[95m",
+      "EXCEL": "\\u001b[93m",
+      "RETRY": "\\u001b[95m"
+    }
+  },
+  
+  "validaciones": {
+    "longitud_cufe": 96,
+    "verificar_formato_hex": true,
+    "eliminar_duplicados": true
+  }
+}

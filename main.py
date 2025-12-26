@@ -13,13 +13,20 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from DrissionPage import ChromiumPage, ChromiumOptions
 
+# === MÓDULOS PROPIOS ===
+from config import cargar_settings
+from utils import log
+
 # === CONFIGURACIÓN ===
-DIAN_URL = "https://catalogo-vpfe.dian.gov.co/User/SearchDocument"
-CARPETA_PDFS = "facturas_pdfs_descargados"
-ARCHIVO_MAPPING = "mapping_cufes_pdfs.json"
-ARCHIVO_EXCEL = f"Facturas_Completas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-NUM_NAVEGADORES = 10  # 🚀 10 navegadores en paralelo
-MAX_REINTENTOS = 2    # Reintentar 2 veces si falla
+settings = cargar_settings()
+
+# Variables globales (retrocompatibilidad)
+DIAN_URL = settings.dian_url
+CARPETA_PDFS = settings.carpeta_pdfs
+ARCHIVO_MAPPING = settings.archivo_mapping
+ARCHIVO_EXCEL = settings.archivo_excel
+NUM_NAVEGADORES = settings.num_navegadores
+MAX_REINTENTOS = settings.max_reintentos
 
 # === COLAS DE PIPELINE ===
 cola_trabajo = queue.Queue()
@@ -28,7 +35,7 @@ cola_pdfs_procesar = queue.Queue()
 cola_resultados = queue.Queue()
 
 # === LOCKS ===
-lock_consola = threading.Lock()
+lock_consola = threading.Lock()  # Usado por el logger de utils
 lock_mapping = threading.Lock()
 lock_excel = threading.Lock()
 lock_reintentos = threading.Lock()
@@ -39,33 +46,6 @@ navegadores_activos = []
 orden_original = []
 datos_completos = []
 intentos_por_cufe = {}  # Tracking de intentos
-
-def log(nav_id, mensaje, nivel="INFO"):
-    """Log con colores"""
-    colores = {
-        "INFO": "\033[94m",
-        "OK": "\033[92m",
-        "WARN": "\033[93m",
-        "ERROR": "\033[91m",
-        "DEBUG": "\033[96m",
-        "CRIT": "\033[95m",
-        "EXCEL": "\033[93m",
-        "RETRY": "\033[95m"
-    }
-    
-    with lock_consola:
-        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        if nav_id == 0:
-            prefix = "[SYS]"
-        elif nav_id == 99:
-            prefix = "[EXT]"
-        elif nav_id == 98:
-            prefix = "[XLS]"
-        else:
-            prefix = f"[N{nav_id}]"
-        
-        color = colores.get(nivel, "")
-        print(f"{color}{ts} {prefix} [{nivel}] {mensaje}\033[0m")
 
 def limpiar_al_salir():
     """Limpia navegadores"""
