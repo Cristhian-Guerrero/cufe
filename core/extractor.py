@@ -2,6 +2,7 @@
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION
 Extrae información estructurada de facturas electrónicas en PDF
+v3.5.1 - Corregido manejo de rutas
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -70,6 +71,9 @@ class ExtractorPDF:
         Returns:
             Diccionario con todos los datos extraídos
         """
+        # CORREGIDO: Convertir a ruta absoluta ANTES de usar
+        ruta_pdf_absoluta = os.path.abspath(ruta_pdf)
+        
         datos = {
             'Numero': numero,
             'CUFE': cufe_original,
@@ -97,17 +101,30 @@ class ExtractorPDF:
             'IVA': '',
             'Total_Factura': '',
             'Numero_Autorizacion': '',
-            'Ruta_PDF': os.path.abspath(ruta_pdf),
+            'Ruta_PDF': ruta_pdf_absoluta,
             'Notas': '',
             'Estado': '✅ Procesado'
         }
         
+        # CORREGIDO: Verificar que el archivo exista
+        if not os.path.exists(ruta_pdf_absoluta):
+            log(99, f"❌ PDF no existe: {ruta_pdf_absoluta[-50:]}", "ERROR")
+            datos['Estado'] = '❌ Error - PDF no encontrado'
+            return datos
+        
         try:
-            with pdfplumber.open(ruta_pdf) as pdf:
+            with pdfplumber.open(ruta_pdf_absoluta) as pdf:
                 # Extraer texto completo
                 texto_completo = ""
                 for pagina in pdf.pages:
-                    texto_completo += pagina.extract_text() + "\n"
+                    texto_pagina = pagina.extract_text()
+                    if texto_pagina:
+                        texto_completo += texto_pagina + "\n"
+                
+                if not texto_completo.strip():
+                    log(99, f"⚠️ PDF vacío o sin texto", "WARN")
+                    datos['Estado'] = '⚠️ PDF sin texto'
+                    return datos
                 
                 # Extraer cada campo
                 self._extraer_cufe(datos, texto_completo)
@@ -120,8 +137,8 @@ class ExtractorPDF:
                 self._extraer_autorizacion(datos, texto_completo)
         
         except Exception as e:
-            log(99, f"Error extrayendo: {str(e)[:40]}", "ERROR")
-            datos['Estado'] = '❌ Error'
+            log(99, f"Error extrayendo: {str(e)[:50]}", "ERROR")
+            datos['Estado'] = f'❌ Error: {str(e)[:30]}'
         
         return datos
     
