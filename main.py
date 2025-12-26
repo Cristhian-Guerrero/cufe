@@ -16,6 +16,7 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 # === MÓDULOS PROPIOS ===
 from config import cargar_settings
 from utils import log
+from core import extraer_datos_pdf, generar_excel_final
 
 # === CONFIGURACIÓN ===
 settings = cargar_settings()
@@ -672,140 +673,6 @@ def trabajador_extractor():
 
 # === EXCEL PROFESIONAL ===
 
-def generar_excel_final():
-    log(98, "📊 Generando Excel profesional...", "EXCEL")
-    
-    with lock_excel:
-        if not datos_completos:
-            log(98, "❌ No hay datos", "ERROR")
-            return
-        
-        datos_ordenados = sorted(datos_completos, key=lambda x: x.get('Numero', 999))
-        
-        df = pd.DataFrame(datos_ordenados)
-        
-        columnas_orden = [
-            'Numero', 'Estado', 'Numero_Factura', 'Prefijo', 'Folio',
-            'Fecha_Emision', 'Fecha_Vencimiento',
-            'Emisor_RazonSocial', 'Emisor_NIT', 'Emisor_Ciudad', 'Emisor_Departamento',
-            'Emisor_Direccion', 'Emisor_Telefono', 'Emisor_Email',
-            'Receptor_RazonSocial', 'Receptor_NIT', 'Receptor_Ciudad', 'Receptor_Departamento',
-            'Receptor_Direccion', 'Receptor_Email',
-            'Subtotal', 'IVA', 'Total_Factura',
-            'Forma_Pago', 'Medio_Pago', 'Numero_Autorizacion',
-            'CUFE', 'Ruta_PDF', 'Notas'
-        ]
-        
-        df = df[columnas_orden]
-        df.to_excel(ARCHIVO_EXCEL, index=False, sheet_name='Facturas')
-        
-        log(98, "✓ Datos guardados", "OK")
-        aplicar_formato_profesional()
-        log(98, "✅ Excel profesional generado", "OK")
-
-def aplicar_formato_profesional():
-    try:
-        wb = load_workbook(ARCHIVO_EXCEL)
-        ws = wb.active
-        
-        fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-        font_header = Font(bold=True, color="FFFFFF", size=12, name='Calibri')
-        align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        
-        borde_grueso = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
-        )
-        
-        fill_par = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-        fill_impar = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-        
-        align_centro = Alignment(horizontal='center', vertical='center')
-        align_izquierda = Alignment(horizontal='left', vertical='center')
-        align_derecha = Alignment(horizontal='right', vertical='center')
-        
-        for cell in ws[1]:
-            cell.fill = fill_header
-            cell.font = font_header
-            cell.alignment = align_header
-            cell.border = borde_grueso
-        
-        anchos_personalizados = {
-            'A': 8, 'B': 12, 'C': 18, 'D': 10, 'E': 10,
-            'F': 14, 'G': 14, 'H': 35, 'I': 16, 'J': 20,
-            'K': 18, 'L': 35, 'M': 16, 'N': 30, 'O': 35,
-            'P': 16, 'Q': 20, 'R': 18, 'S': 35, 'T': 30,
-            'U': 15, 'V': 15, 'W': 15, 'X': 18, 'Y': 18,
-            'Z': 18, 'AA': 70, 'AB': 15, 'AC': 50
-        }
-        
-        for col, ancho in anchos_personalizados.items():
-            ws.column_dimensions[col].width = ancho
-        
-        col_estado = None
-        col_pdf = None
-        col_subtotal = None
-        col_iva = None
-        col_total = None
-        
-        for idx, cell in enumerate(ws[1], 1):
-            if cell.value == 'Estado':
-                col_estado = idx
-            elif cell.value == 'Ruta_PDF':
-                col_pdf = idx
-            elif cell.value == 'Subtotal':
-                col_subtotal = idx
-            elif cell.value == 'IVA':
-                col_iva = idx
-            elif cell.value == 'Total_Factura':
-                col_total = idx
-        
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
-            fill = fill_par if row_idx % 2 == 0 else fill_impar
-            
-            for cell_idx, cell in enumerate(row, 1):
-                cell.border = borde_grueso
-                cell.fill = fill
-                
-                if cell_idx == 1:
-                    cell.alignment = align_centro
-                    cell.font = Font(bold=True, size=11)
-                elif cell_idx == col_estado:
-                    cell.alignment = align_centro
-                    cell.font = Font(size=11)
-                elif cell_idx in [col_subtotal, col_iva, col_total]:
-                    cell.alignment = align_derecha
-                    cell.number_format = '$#,##0.00'
-                    cell.font = Font(bold=True if cell_idx == col_total else False, size=11)
-                else:
-                    cell.alignment = align_izquierda
-                
-                if cell_idx == col_pdf:
-                    for dato in datos_completos:
-                        if dato.get('Numero') == row_idx - 1:
-                            ruta_real = dato.get('Ruta_PDF', '')
-                            if ruta_real and os.path.exists(ruta_real):
-                                cell.hyperlink = f"file:///{ruta_real.replace(os.sep, '/')}"
-                                cell.value = "📄 Ver PDF"
-                                cell.font = Font(color="0000FF", underline="single", size=11)
-                                cell.alignment = align_centro
-                            break
-        
-        ws.freeze_panes = 'A2'
-        ws.row_dimensions[1].height = 30
-        
-        for row_idx in range(2, ws.max_row + 1):
-            ws.row_dimensions[row_idx].height = 20
-        
-        ws.auto_filter.ref = ws.dimensions
-        
-        wb.save(ARCHIVO_EXCEL)
-        log(98, "✓ Formato aplicado", "OK")
-        
-    except Exception as e:
-        log(98, f"Error formato: {e}", "ERROR")
 
 # === MAIN ===
 
@@ -882,7 +749,7 @@ def main():
     log(0, "✓ Extracción completada", "OK")
     
     # Generar Excel
-    generar_excel_final()
+    generar_excel_final(ARCHIVO_EXCEL, datos_completos)
     
     duracion = time.time() - tiempo_inicio
     
