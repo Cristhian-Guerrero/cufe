@@ -309,15 +309,14 @@ def inicializar_navegador(nav_id):
     co.set_argument('--no-sandbox')
     co.set_argument('--disable-dev-shm-usage')
     co.set_argument('--disable-gpu')
-    co.set_argument('--window-size=1000,700')
+    co.set_argument('--window-size=400,300')
     co.set_argument(f'--user-data-dir={user_data}')
     co.set_argument('--disable-blink-features=AutomationControlled')
     
     # Posición en cuadrícula 2x5
-    fila = (nav_id - 1) // 5
-    columna = (nav_id - 1) % 5
-    x = columna * 300
-    y = fila * 400
+    # Navegadores fuera de pantalla (invisibles pero no headless)
+    x = -2000
+    y = -2000
     co.set_argument(f'--window-position={x},{y}')
     
     os.makedirs(CARPETA_PDFS, exist_ok=True)
