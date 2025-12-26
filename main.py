@@ -26,7 +26,7 @@ DIAN_URL = settings.dian_url
 CARPETA_PDFS = settings.carpeta_pdfs
 ARCHIVO_MAPPING = settings.archivo_mapping
 ARCHIVO_EXCEL = settings.archivo_excel
-NUM_NAVEGADORES = settings.num_navegadores
+MAX_NAVEGADORES_CONFIG = settings.num_navegadores
 MAX_REINTENTOS = settings.max_reintentos
 
 # === COLAS DE PIPELINE ===
@@ -605,7 +605,7 @@ def procesador_reintentos(nav_id):
             resultado = descargar_cufe(page, bypass, cufe, numero, total, nav_id, intento=intento_actual)
             
             # Si falló de nuevo y puede reintentar
-            if resultado['estado'] == 'error' and intento_actual < MAX_REINTENTOS:
+            if resultado['estado'] == 'error' and resultado['mensaje'] != "No existe en DIAN" and intento_actual < MAX_REINTENTOS:
                 log(nav_id, f"⚠️ Falló de nuevo, reintentando...", "RETRY")
                 cola_reintentos.put((cufe, numero, total))
             else:
@@ -676,21 +676,61 @@ def trabajador_extractor():
 
 # === MAIN ===
 
+def guardar_progreso_parcial():
+    """Guarda progreso parcial cuando se interrumpe con Ctrl+C"""
+    log(0, "\n💾 Guardando progreso parcial...", "WARN")
+    
+    try:
+        # Generar Excel con datos procesados hasta ahora
+        if datos_completos:
+            from core import generar_excel_final
+            archivo_parcial = f"Facturas_Parcial_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            generar_excel_final(archivo_parcial, datos_completos)
+            log(0, f"✅ Excel parcial guardado: {archivo_parcial}", "OK")
+            log(0, f"📊 {len(datos_completos)} facturas procesadas", "INFO")
+        else:
+            log(0, "⚠️  No hay datos para guardar", "WARN")
+        
+        # Guardar mapping
+        guardar_mapping()
+        
+        # Mostrar estadísticas
+        resultados = []
+        while not cola_resultados.empty():
+            try:
+                resultados.append(cola_resultados.get_nowait())
+            except:
+                break
+        
+        if resultados:
+            exitosos = [r for r in resultados if r['estado'] == 'exitoso']
+            errores = [r for r in resultados if r['estado'] == 'error']
+            log(0, f"✅ Completados: {len(exitosos)}", "OK")
+            log(0, f"❌ Con error: {len(errores)}", "ERROR")
+        
+    except Exception as e:
+        log(0, f"❌ Error guardando progreso: {e}", "ERROR")
+
+# === MAIN ===
+
 def main():
     print("\n" + "="*70)
-    print("🚀 SISTEMA ULTRA OPTIMIZADO - 10 NAVEGADORES + REINTENTOS")
+    print("🚀 SISTEMA ULTRA OPTIMIZADO - NAVEGADORES DINÁMICOS + REINTENTOS")
     print("="*70)
     print()
     
-    if not os.path.exists('cufes_test.txt'):
-        log(0, "❌ No existe cufes_test.txt", "ERROR")
-        return
+    from core import cargar_cufes
+    cufes = cargar_cufes('cufes_test.txt')
     
-    with open('cufes_test.txt', 'r', encoding='utf-8') as f:
-        cufes = [l.strip() for l in f if l.strip()]
+    if not cufes:
+        log(0, "❌ No hay CUFEs válidos para procesar", "CRIT")
+        return
     
     global orden_original
     orden_original = cufes.copy()
+    
+    # 🔥 MEJORA: Ajuste dinámico de navegadores
+    NUM_NAVEGADORES = min(len(cufes), MAX_NAVEGADORES_CONFIG)
     
     log(0, f"📋 {len(cufes)} CUFEs", "INFO")
     log(0, f"🚀 {NUM_NAVEGADORES} navegadores paralelos", "INFO")
@@ -800,8 +840,10 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        log(0, "\n⚠️ Interrumpido", "WARN")
+        log(0, "\n⚠️ Interrumpido por usuario (Ctrl+C)", "WARN")
+        guardar_progreso_parcial()
         limpiar_al_salir()
+        log(0, "💾 Progreso guardado. Puedes revisar el Excel parcial.", "INFO")
     except Exception as e:
         log(0, f"\n❌ Error: {e}", "ERROR")
         limpiar_al_salir()
