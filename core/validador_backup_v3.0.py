@@ -1,8 +1,7 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-VALIDADOR DE CUFES - CUFE DIAN AUTOMATION v3.1.0
+VALIDADOR DE CUFES - CUFE DIAN AUTOMATION
 Valida formato, elimina duplicados y detecta CUFEs inválidos
-NUEVO: Soporte para archivos .txt y .xlsx
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -10,14 +9,6 @@ import os
 import re
 from typing import List, Tuple, Dict
 from utils import log
-
-# Importación condicional de openpyxl (ya está en requirements.txt)
-try:
-    from openpyxl import load_workbook
-    EXCEL_DISPONIBLE = True
-except ImportError:
-    EXCEL_DISPONIBLE = False
-    log(0, "⚠️  openpyxl no disponible - archivos Excel deshabilitados", "WARN")
 
 
 class ValidadorCUFE:
@@ -29,10 +20,6 @@ class ValidadorCUFE:
     - Formato hexadecimal válido
     - Eliminación de duplicados
     - Archivo de entrada existe
-    
-    Formatos soportados:
-    - .txt (un CUFE por línea)
-    - .xlsx (CUFEs en columna A)
     """
     
     LONGITUD_CUFE = 96
@@ -62,15 +49,6 @@ class ValidadorCUFE:
         if not os.access(ruta_archivo, os.R_OK):
             return False, f"❌ Sin permisos de lectura: {ruta_archivo}"
         
-        # Verificar extensión soportada
-        extension = os.path.splitext(ruta_archivo)[1].lower()
-        if extension not in ['.txt', '.xlsx']:
-            return False, f"❌ Formato no soportado: {extension} (use .txt o .xlsx)"
-        
-        # Si es Excel, verificar que openpyxl esté disponible
-        if extension == '.xlsx' and not EXCEL_DISPONIBLE:
-            return False, "❌ Para archivos Excel instale: pip install openpyxl"
-        
         return True, ""
     
     def es_cufe_valido(self, cufe: str) -> Tuple[bool, str]:
@@ -96,100 +74,9 @@ class ValidadorCUFE:
         
         return True, ""
     
-    def _leer_archivo_txt(self, ruta_archivo: str) -> Tuple[List[str], str]:
-        """
-        Lee CUFEs desde archivo .txt (un CUFE por línea)
-        
-        Args:
-            ruta_archivo: Ruta del archivo .txt
-            
-        Returns:
-            (lista_lineas, mensaje_error)
-        """
-        try:
-            with open(ruta_archivo, 'r', encoding='utf-8') as f:
-                lineas = [l.strip() for l in f if l.strip()]
-            
-            if not lineas:
-                return [], "❌ Archivo vacío"
-            
-            log(0, f"📄 Leídas {len(lineas)} líneas desde archivo .txt", "INFO")
-            return lineas, ""
-            
-        except Exception as e:
-            return [], f"❌ Error leyendo archivo .txt: {str(e)}"
-    
-    def _leer_archivo_excel(self, ruta_archivo: str) -> Tuple[List[str], str]:
-        """
-        Lee CUFEs desde archivo .xlsx (columna A)
-        
-        Formato esperado:
-        ┌─────────────────────────────┐
-        │ A (CUFE)                    │
-        ├─────────────────────────────┤
-        │ CUFE                        │  <- Fila de encabezado (opcional)
-        │ 8d528789cb2547d0...         │
-        │ c64601b7a5b65b68...         │
-        └─────────────────────────────┘
-        
-        Args:
-            ruta_archivo: Ruta del archivo .xlsx
-            
-        Returns:
-            (lista_cufes, mensaje_error)
-        """
-        if not EXCEL_DISPONIBLE:
-            return [], "❌ openpyxl no disponible"
-        
-        try:
-            # Cargar archivo Excel
-            wb = load_workbook(ruta_archivo, read_only=True, data_only=True)
-            
-            # Usar la primera hoja
-            ws = wb.active
-            log(0, f"📊 Leyendo Excel: hoja '{ws.title}'", "INFO")
-            
-            # Leer columna A
-            cufes_raw = []
-            primera_fila = True
-            
-            for row_idx, row in enumerate(ws.iter_rows(min_col=1, max_col=1, values_only=True), 1):
-                valor = row[0]
-                
-                # Saltar si es None o vacío
-                if valor is None:
-                    continue
-                
-                valor_str = str(valor).strip()
-                
-                if not valor_str:
-                    continue
-                
-                # Detectar encabezado (primera fila)
-                if primera_fila:
-                    primera_fila = False
-                    
-                    # Si la primera celda es "CUFE" o similar, es encabezado
-                    if valor_str.upper() in ['CUFE', 'CUFES', 'CÓDIGO', 'CODIGO']:
-                        log(0, f"  ✓ Detectado encabezado en fila 1: '{valor_str}'", "INFO")
-                        continue
-                
-                cufes_raw.append(valor_str)
-            
-            wb.close()
-            
-            if not cufes_raw:
-                return [], "❌ No se encontraron CUFEs en columna A"
-            
-            log(0, f"📄 Leídos {len(cufes_raw)} valores desde Excel (columna A)", "INFO")
-            return cufes_raw, ""
-            
-        except Exception as e:
-            return [], f"❌ Error leyendo archivo Excel: {str(e)}"
-    
     def cargar_y_validar(self, ruta_archivo: str) -> Tuple[List[str], Dict[str, any]]:
         """
-        Carga y valida CUFEs desde archivo (.txt o .xlsx)
+        Carga y valida CUFEs desde archivo
         
         Args:
             ruta_archivo: Ruta del archivo de entrada
@@ -203,25 +90,17 @@ class ValidadorCUFE:
             log(0, error, "ERROR")
             return [], {'error': error}
         
-        # Detectar extensión y leer archivo
-        extension = os.path.splitext(ruta_archivo)[1].lower()
-        
-        if extension == '.txt':
-            lineas, error = self._leer_archivo_txt(ruta_archivo)
-        elif extension == '.xlsx':
-            lineas, error = self._leer_archivo_excel(ruta_archivo)
-        else:
-            error = f"❌ Extensión no soportada: {extension}"
-            log(0, error, "ERROR")
-            return [], {'error': error}
-        
-        # Verificar si hubo error en la lectura
-        if error:
+        # Leer archivo
+        try:
+            with open(ruta_archivo, 'r', encoding='utf-8') as f:
+                lineas = [l.strip() for l in f if l.strip()]
+        except Exception as e:
+            error = f"❌ Error leyendo archivo: {str(e)}"
             log(0, error, "ERROR")
             return [], {'error': error}
         
         if not lineas:
-            error = "❌ No se encontraron datos"
+            error = "❌ Archivo vacío"
             log(0, error, "ERROR")
             return [], {'error': error}
         
@@ -257,8 +136,7 @@ class ValidadorCUFE:
             'total_lineas': len(lineas),
             'validos': len(self.cufes_validos),
             'invalidos': len(self.cufes_invalidos),
-            'duplicados': self.duplicados_eliminados,
-            'formato': extension
+            'duplicados': self.duplicados_eliminados
         }
         
         # Mostrar resumen
@@ -272,7 +150,6 @@ class ValidadorCUFE:
         print("📋 VALIDACIÓN DE CUFEs")
         print("="*70)
         
-        log(0, f"📄 Formato: {stats.get('formato', 'desconocido').upper()}", "INFO")
         log(0, f"📄 Total líneas: {stats['total_lineas']}", "INFO")
         log(0, f"✅ CUFEs válidos: {stats['validos']}", "OK")
         
@@ -307,10 +184,8 @@ def cargar_cufes(ruta_archivo: str) -> List[str]:
     """
     Función wrapper para mantener compatibilidad con código original
     
-    Soporta archivos .txt y .xlsx automáticamente
-    
     Args:
-        ruta_archivo: Ruta del archivo de CUFEs (.txt o .xlsx)
+        ruta_archivo: Ruta del archivo de CUFEs
         
     Returns:
         Lista de CUFEs válidos
@@ -331,7 +206,7 @@ def cargar_cufes(ruta_archivo: str) -> List[str]:
 
 if __name__ == "__main__":
     print("\n" + "="*70)
-    print("🧪 PROBANDO VALIDADOR DE CUFEs v3.1.0")
+    print("🧪 PROBANDO VALIDADOR DE CUFEs")
     print("="*70 + "\n")
     
     import sys
@@ -344,10 +219,10 @@ if __name__ == "__main__":
         
         print(f"\n✅ Resultado: {len(cufes)} CUFEs válidos listos para procesar")
     else:
-        print("ℹ️  Uso: python3 -m core.validador <archivo_cufes.txt|.xlsx>")
+        print("ℹ️  Uso: python3 -m core.validador <archivo_cufes.txt>")
         
         # Test con datos de ejemplo
-        print("\n🧪 Test con CUFEs de ejemplo (.txt):\n")
+        print("\n🧪 Test con CUFEs de ejemplo:\n")
         
         # Crear archivo temporal de prueba
         with open('/tmp/test_cufes.txt', 'w') as f:
@@ -358,6 +233,6 @@ if __name__ == "__main__":
             f.write("c64601b7a5b65b68d2ff2a7e7c31d48beb674bc0974172368193825144d5aa5c1d7d444412ae5fbc7819e3e70341bc71\n")  # Válido
         
         cufes = cargar_cufes('/tmp/test_cufes.txt')
-        print(f"\n✅ {len(cufes)} CUFEs válidos encontrados en .txt")
+        print(f"\n✅ {len(cufes)} CUFEs válidos encontrados")
     
     print("\n" + "="*70 + "\n")

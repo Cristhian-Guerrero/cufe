@@ -46,3 +46,5 @@ main_backup.py
 main_v2_backup.py
 main_v2.py
 main_v3.py
+.~lock.*
+test_validacion.txt

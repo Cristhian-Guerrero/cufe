@@ -714,13 +714,18 @@ def guardar_progreso_parcial():
 # === MAIN ===
 
 def main():
+    import sys
+    
+    # Permitir archivo como argumento: python3 main.py archivo.xlsx
+    archivo_cufes = sys.argv[1] if len(sys.argv) > 1 else 'cufes_test.txt'
+    
     print("\n" + "="*70)
     print("🚀 SISTEMA ULTRA OPTIMIZADO - NAVEGADORES DINÁMICOS + REINTENTOS")
     print("="*70)
     print()
     
     from core import cargar_cufes
-    cufes = cargar_cufes('cufes_test.txt')
+    cufes = cargar_cufes(archivo_cufes)
     
     if not cufes:
         log(0, "❌ No hay CUFEs válidos para procesar", "CRIT")
