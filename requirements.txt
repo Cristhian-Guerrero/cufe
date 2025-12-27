@@ -1,25 +1,18 @@
 # ═══════════════════════════════════════════════════
 # SISTEMA DE CONSULTA CUFE - DIAN COLOMBIA
-# Dependencias Python
+# Dependencias Python v3.5.0
 # ═══════════════════════════════════════════════════
 
-# Navegador automatizado sin detección
-undetected-chromedriver>=3.5.0
-
-# Selenium (requerido por undetected-chromedriver)
-selenium>=4.15.0
+# Navegador automatizado (PRINCIPAL)
+DrissionPage>=4.0.0
 
 # Procesamiento de PDFs
 pdfplumber>=0.10.0
-PyPDF2>=3.0.0
 
 # Manipulación de Excel
 pandas>=2.0.0
 openpyxl>=3.1.0
 xlsxwriter>=3.1.0
 
-# Procesamiento de imágenes (opcional)
+# Procesamiento de imágenes
 Pillow>=10.0.0
-
-# Notas de instalación:
-# pip install --user --break-system-packages -r requirements.txt
