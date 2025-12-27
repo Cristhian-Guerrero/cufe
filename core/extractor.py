@@ -1,8 +1,7 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION
-Extrae información estructurada de facturas electrónicas en PDF
-v3.5.1 - Corregido manejo de rutas
+EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (SIMPLE & CLEAN)
+v6.0 - Enfoque Contable: Solo Razón Social y Nombre Comercial
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -11,335 +10,219 @@ import re
 import pdfplumber
 from utils import log
 
-
 class ExtractorPDF:
-    """
-    Extractor de datos de facturas electrónicas en PDF
-    
-    Extrae:
-    - Información del emisor (NIT, razón social, dirección, etc.)
-    - Información del receptor/adquiriente
-    - Datos de la factura (número, fechas, CUFE)
-    - Información financiera (subtotal, IVA, total)
-    - Métodos de pago
-    """
-    
     def __init__(self):
-        """Inicializa el extractor"""
         pass
-    
+
     @staticmethod
     def limpiar_texto(texto):
-        """
-        Limpia texto eliminando espacios múltiples
-        
-        Args:
-            texto: Texto a limpiar
-            
-        Returns:
-            Texto limpio
-        """
-        if not texto:
-            return ""
+        if not texto: return ""
         return re.sub(r'\s+', ' ', texto).strip()
     
     @staticmethod
-    def limpiar_nit(texto):
+    def limpiar_nombre_puro(texto):
         """
-        Extrae solo los números del NIT
+        Limpia basura técnica al final (ej: ' 01 00')
+        """
+        if not texto: return ""
+        # Quitar números de control al final que pone el software
+        texto = re.sub(r'\s+\d+\s*\d*$', '', texto)
+        return texto.strip(" .,;-")
+
+    @staticmethod
+    def limpiar_monto(texto):
+        if not texto: return "0"
+        limpio = re.sub(r'[^\d,.-]', '', texto)
+        try:
+            if ',' in limpio and '.' in limpio:
+                if limpio.rfind(',') > limpio.rfind('.'): 
+                    limpio = limpio.replace('.', '').replace(',', '.')
+                else: 
+                    limpio = limpio.replace(',', '')
+            elif ',' in limpio: 
+                 limpio = limpio.replace(',', '.')
+            elif '.' in limpio:
+                 if limpio.count('.') > 1: limpio = limpio.replace('.', '')
+            return float(limpio)
+        except:
+            return 0
+
+    def _procesar_nombre_adquiriente(self, nombre_bruto, datos):
+        """
+        Separa lógicamente en Razón Social (Legal) y Nombre Comercial (Establecimiento)
+        usando el separador '/' si existe.
+        """
+        if not nombre_bruto: 
+            datos['Adq_RazonSocial'] = ''
+            datos['Adq_NombreComercial'] = ''
+            return
+
+        limpio = self.limpiar_nombre_puro(nombre_bruto)
         
-        Args:
-            texto: Texto que contiene el NIT
-            
-        Returns:
-            NIT limpio (solo números, puntos y guiones)
-        """
-        if not texto:
-            return ""
-        match = re.search(r'([\d\.-]+)', texto)
-        return match.group(1) if match else texto
-    
+        if '/' in limpio:
+            partes = limpio.split('/')
+            # LOGICA: ESTABLECIMIENTO / PROPIETARIO
+            # Parte Izquierda: Nombre Comercial (Ej: DROGUERIA LA 50)
+            # Parte Derecha: Razón Social Legal (Ej: MARIA PEREZ)
+            if len(partes) >= 2:
+                comercial = partes[0].strip()
+                legal = partes[1].strip()
+                
+                # A veces el software pone basura en un lado, validamos
+                if len(legal) > 2:
+                    datos['Adq_NombreComercial'] = comercial
+                    datos['Adq_RazonSocial'] = legal # Este es el que importa fiscalmente
+                else:
+                    datos['Adq_RazonSocial'] = limpio
+            else:
+                datos['Adq_RazonSocial'] = limpio
+        else:
+            # Si no hay slash, todo es Razón Social
+            datos['Adq_RazonSocial'] = limpio
+            datos['Adq_NombreComercial'] = '' # No aplica
+
     def extraer_datos(self, ruta_pdf, cufe_original, numero):
-        """
-        Extrae todos los datos del PDF
-        
-        Args:
-            ruta_pdf: Ruta del archivo PDF
-            cufe_original: CUFE original usado para descargar
-            numero: Número secuencial del CUFE
-            
-        Returns:
-            Diccionario con todos los datos extraídos
-        """
-        # CORREGIDO: Convertir a ruta absoluta ANTES de usar
         ruta_pdf_absoluta = os.path.abspath(ruta_pdf)
         
         datos = {
-            'Numero': numero,
-            'CUFE': cufe_original,
-            'Numero_Factura': '',
-            'Prefijo': '',
-            'Folio': '',
-            'Fecha_Emision': '',
-            'Fecha_Vencimiento': '',
-            'Forma_Pago': '',
-            'Medio_Pago': '',
-            'Emisor_RazonSocial': '',
-            'Emisor_NIT': '',
-            'Emisor_Direccion': '',
-            'Emisor_Ciudad': '',
-            'Emisor_Departamento': '',
-            'Emisor_Telefono': '',
-            'Emisor_Email': '',
-            'Receptor_RazonSocial': '',
-            'Receptor_NIT': '',
-            'Receptor_Direccion': '',
-            'Receptor_Ciudad': '',
-            'Receptor_Departamento': '',
-            'Receptor_Email': '',
-            'Subtotal': '',
-            'IVA': '',
-            'Total_Factura': '',
-            'Numero_Autorizacion': '',
-            'Ruta_PDF': ruta_pdf_absoluta,
-            'Notas': '',
-            'Estado': '✅ Procesado'
+            'Numero': numero, 'Estado': '✅ Procesado', 'Ruta_PDF': ruta_pdf_absoluta, 'Notas': '',
+            'CUFE': cufe_original, 'Numero_Factura': '', 'Fecha_Emision': '', 'Fecha_Vencimiento': '',
+            'Tipo_Operacion': '', 'Forma_Pago': '', 'Medio_Pago': '', 'Orden_Pedido': '', 'Moneda': 'COP',
+            
+            # EMISOR
+            'Emisor_RazonSocial': '', 'Emisor_NombreComercial': '', 'Emisor_NIT': '',
+            'Emisor_TipoContribuyente': '', 'Emisor_RegimenFiscal': '', 'Emisor_Responsabilidad': '',
+            'Emisor_ActividadEconomica': '', 'Emisor_Departamento': '', 'Emisor_Municipio': '',
+            'Emisor_Direccion': '', 'Emisor_Telefono': '', 'Emisor_Correo': '',
+            
+            # ADQUIRIENTE (SIMPLIFICADO)
+            'Adq_RazonSocial': '',       # El nombre legal (Persona o Empresa)
+            'Adq_NombreComercial': '',   # El nombre del establecimiento (si hay /)
+            'Adq_Tipo': '',              # Natural / Juridica
+            'Adq_NumeroDocumento': '', 'Adq_TipoDocumento': '', 
+            'Adq_Departamento': '', 'Adq_Municipio': '', 
+            'Adq_Direccion': '', 'Adq_Telefono': '', 'Adq_Correo': '',
+            
+            # TOTALES
+            'Total_Moneda': 'COP', 'Subtotal': 0, 'Descuento_Detalle': 0, 'Recargo_Detalle': 0, 
+            'Total_Bruto': 0, 'IVA': 0, 'INC': 0, 'Bolsas': 0, 'Otros_Impuestos': 0,
+            'Total_Neto': 0, 'Descuento_Global': 0, 'Total_Factura': 0, 
+            'Anticipos': 0, 'Rete_Fuente': 0, 'Rete_IVA': 0, 'Rete_ICA': 0
         }
         
-        # CORREGIDO: Verificar que el archivo exista
         if not os.path.exists(ruta_pdf_absoluta):
-            log(99, f"❌ PDF no existe: {ruta_pdf_absoluta[-50:]}", "ERROR")
-            datos['Estado'] = '❌ Error - PDF no encontrado'
+            datos['Estado'] = '❌ PDF no encontrado'
             return datos
         
         try:
             with pdfplumber.open(ruta_pdf_absoluta) as pdf:
-                # Extraer texto completo
                 texto_completo = ""
                 for pagina in pdf.pages:
-                    texto_pagina = pagina.extract_text()
-                    if texto_pagina:
-                        texto_completo += texto_pagina + "\n"
+                    txt = pagina.extract_text()
+                    if txt: texto_completo += txt + "\n"
                 
                 if not texto_completo.strip():
-                    log(99, f"⚠️ PDF vacío o sin texto", "WARN")
                     datos['Estado'] = '⚠️ PDF sin texto'
                     return datos
-                
-                # Extraer cada campo
-                self._extraer_cufe(datos, texto_completo)
-                self._extraer_numero_factura(datos, texto_completo)
-                self._extraer_fechas(datos, texto_completo)
+
+                self._extraer_documento(datos, texto_completo)
                 self._extraer_emisor(datos, texto_completo)
-                self._extraer_receptor(datos, texto_completo)
-                self._extraer_financiero(datos, texto_completo)
-                self._extraer_pagos(datos, texto_completo)
-                self._extraer_autorizacion(datos, texto_completo)
-        
+                self._extraer_adquiriente(datos, texto_completo)
+                self._extraer_totales(datos, texto_completo)
+                
         except Exception as e:
-            log(99, f"Error extrayendo: {str(e)[:50]}", "ERROR")
-            datos['Estado'] = f'❌ Error: {str(e)[:30]}'
+            log(99, f"Error: {str(e)[:50]}", "ERROR")
+            datos['Estado'] = f'❌ Error Lectura'
         
         return datos
-    
-    def _extraer_cufe(self, datos, texto):
-        """Extrae el CUFE del texto"""
-        m = re.search(r'CUFE\s*:?\s*([\w\n]+)', texto)
-        if m:
-            datos['CUFE'] = m.group(1).replace('\n', '').strip()
-    
-    def _extraer_numero_factura(self, datos, texto):
-        """Extrae número de factura, prefijo y folio"""
-        m = re.search(r'Número de Factura:\s*([A-Z0-9\-]+)', texto)
-        if m:
-            numero_factura = m.group(1)
-            datos['Numero_Factura'] = numero_factura
-            
-            # Separar prefijo y folio
-            partes = numero_factura.split('-')
-            if len(partes) == 2:
-                datos['Prefijo'] = partes[0]
-                datos['Folio'] = partes[1]
-    
-    def _extraer_fechas(self, datos, texto):
-        """Extrae fechas de emisión y vencimiento"""
-        m = re.search(r'Fecha de Emisión:\s*(\d{2}/\d{2}/\d{4})', texto)
-        if m:
-            datos['Fecha_Emision'] = m.group(1)
-        
-        m = re.search(r'Fecha de Vencimiento:\s*(\d{2}/\d{2}/\d{4})', texto)
-        if m:
-            datos['Fecha_Vencimiento'] = m.group(1)
-    
+
+    def _extraer_documento(self, datos, texto):
+        m = re.search(r'CUFE:?\s*([\w\n]+)', texto); 
+        if m: datos['CUFE'] = m.group(1).replace('\n', '').strip()[:100]
+        m = re.search(r'Número de Factura:\s*([A-Z0-9\-]+)', texto); 
+        if m: datos['Numero_Factura'] = m.group(1)
+        m = re.search(r'Fecha de Emisión:\s*(\d{2}/\d{2}/\d{4})', texto); 
+        if m: datos['Fecha_Emision'] = m.group(1)
+        m = re.search(r'Fecha de Vencimiento:\s*(\d{2}/\d{2}/\d{4})', texto); 
+        if m: datos['Fecha_Vencimiento'] = m.group(1)
+        m = re.search(r'Tipo de Operación:\s*([^\n]+)', texto); 
+        if m: datos['Tipo_Operacion'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Forma de pago:\s*([^\n]+)', texto); 
+        if m: datos['Forma_Pago'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Medio de Pago:\s*([^\n]+)', texto); 
+        if m: datos['Medio_Pago'] = self.limpiar_texto(m.group(1))
+
     def _extraer_emisor(self, datos, texto):
-        """Extrae datos del emisor"""
-        # Buscar bloque del emisor
-        bloque_emisor = re.search(
-            r'Datos del Emisor.*?Datos del Adquiriente',
-            texto,
-            re.DOTALL | re.IGNORECASE
-        )
-        txt_emisor = bloque_emisor.group(0) if bloque_emisor else texto
+        bloque = re.search(r'Datos del Emisor(.*?)Datos del Adquiriente', texto, re.DOTALL | re.IGNORECASE)
+        txt = bloque.group(1) if bloque else texto
         
-        # Razón social
-        m = re.search(r'Razón Social:\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_RazonSocial'] = self.limpiar_texto(m.group(1))
-        
-        # NIT
-        m = re.search(r'Nit del Emisor:\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_NIT'] = self.limpiar_nit(m.group(1))
-        
-        # Dirección
-        m = re.search(r'Dirección:\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_Direccion'] = self.limpiar_texto(m.group(1))
-        
-        # Ciudad
-        m = re.search(r'Ciudad:\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_Ciudad'] = self.limpiar_texto(m.group(1))
-        
-        # Departamento
-        m = re.search(r'Departamento:\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_Departamento'] = self.limpiar_texto(m.group(1))
-        
-        # Teléfono
-        m = re.search(r'(?:Teléfono|Telefono):\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_Telefono'] = self.limpiar_texto(m.group(1))
-        
-        # Email
-        m = re.search(r'Email:\s*([^\n]+)', txt_emisor)
-        if m:
-            datos['Emisor_Email'] = self.limpiar_texto(m.group(1))
-    
-    def _extraer_receptor(self, datos, texto):
-        """Extrae datos del receptor/adquiriente"""
-        # Buscar bloque del receptor
-        bloque_receptor = re.search(
-            r'Datos del Adquiriente.*?(?:Detalles de Productos|Observaciones)',
-            texto,
-            re.DOTALL | re.IGNORECASE
-        )
-        
-        if not bloque_receptor:
-            return
-        
-        txt_receptor = bloque_receptor.group(0)
-        
-        # Razón social
-        m = re.search(r'(?:Nombre o )?Razón Social:\s*([^\n]+)', txt_receptor)
-        if m:
-            datos['Receptor_RazonSocial'] = self.limpiar_texto(m.group(1))
-        
-        # NIT/Documento
-        m = re.search(r'Número Documento:\s*([^\n]+)', txt_receptor)
-        if m:
-            datos['Receptor_NIT'] = self.limpiar_nit(m.group(1))
-        
-        # Dirección
-        m = re.search(r'Dirección:\s*([^\n]+)', txt_receptor)
-        if m:
-            datos['Receptor_Direccion'] = self.limpiar_texto(m.group(1))
-        
-        # Ciudad
-        m = re.search(r'Ciudad:\s*([^\n]+)', txt_receptor)
-        if m:
-            datos['Receptor_Ciudad'] = self.limpiar_texto(m.group(1))
-        
-        # Departamento
-        m = re.search(r'Departamento:\s*([^\n]+)', txt_receptor)
-        if m:
-            datos['Receptor_Departamento'] = self.limpiar_texto(m.group(1))
-        
-        # Email
-        m = re.search(r'Email:\s*([^\n]+)', txt_receptor)
-        if m:
-            datos['Receptor_Email'] = self.limpiar_texto(m.group(1))
-    
-    def _extraer_financiero(self, datos, texto):
-        """Extrae información financiera (subtotal, IVA, total)"""
-        # Total factura
-        m = re.search(r'Total factura.*?(?:COP\s+)?\$?\s*([\d\.,]+)', texto)
-        if m:
-            datos['Total_Factura'] = m.group(1)
-        
-        # Subtotal
-        m = re.search(r'Subtotal\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', texto)
-        if m:
-            datos['Subtotal'] = m.group(1)
-        
-        # IVA
-        m = re.search(r'Total impuesto.*?(=).*?([\d\.,]+)', texto, re.DOTALL)
-        if not m:
-            m = re.search(r'(?:^|\n)IVA\s+([\d,\.]+)', texto)
-        if m:
-            datos['IVA'] = m.group(2) if len(m.groups()) > 1 else m.group(1)
-    
-    def _extraer_pagos(self, datos, texto):
-        """Extrae forma y medio de pago"""
-        # Forma de pago
-        m = re.search(r'Forma de pago:\s*([^\n]+)', texto)
-        if m:
-            datos['Forma_Pago'] = self.limpiar_texto(m.group(1))
-        
-        # Medio de pago
-        m = re.search(r'Medio de Pago:\s*([^\n]+)', texto)
-        if m:
-            datos['Medio_Pago'] = self.limpiar_texto(m.group(1))
-    
-    def _extraer_autorizacion(self, datos, texto):
-        """Extrae número de autorización"""
-        m = re.search(r'Numero de Autorización:\s*(\d+)', texto)
-        if m:
-            datos['Numero_Autorizacion'] = m.group(1)
+        m = re.search(r'Razón Social:\s*([^\n]+)', txt); 
+        if m: datos['Emisor_RazonSocial'] = self.limpiar_nombre_puro(m.group(1))
+        m = re.search(r'Nombre Comercial:\s*([^\n]+)', txt); 
+        if m: datos['Emisor_NombreComercial'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Nit del Emisor:\s*([\d\.-]+)', txt); 
+        if m: datos['Emisor_NIT'] = m.group(1)
+        m = re.search(r'Tipo de Contribuyente:\s*([^\n]+)', txt); 
+        if m: datos['Emisor_TipoContribuyente'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Régimen Fiscal:(.+)', txt); 
+        if m: datos['Emisor_RegimenFiscal'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Responsabilidad tributaria:\s*(.+)', txt); 
+        if m: datos['Emisor_Responsabilidad'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Dirección:\s*([^\n]+)', txt); 
+        if m: datos['Emisor_Direccion'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Municipio / Ciudad:\s*([^\n]+)', txt); 
+        if m: datos['Emisor_Municipio'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Departamento:\s*([^\n]+)', txt); 
+        if m: datos['Emisor_Departamento'] = self.limpiar_texto(m.group(1))
 
+    def _extraer_adquiriente(self, datos, texto):
+        bloque = re.search(r'Datos del Adquiriente(.*?)Detalles de Productos', texto, re.DOTALL | re.IGNORECASE)
+        txt = bloque.group(1) if bloque else texto
+        
+        # 1. TIPO (Simple, tal cual sale)
+        m = re.search(r'Tipo de Contribuyente:\s*([^\n]+)', txt)
+        if m: 
+            val = self.limpiar_texto(m.group(1))
+            if 'Jurídica' in val or 'Juridica' in val: datos['Adq_Tipo'] = 'Jurídica'
+            elif 'Natural' in val: datos['Adq_Tipo'] = 'Natural'
+            else: datos['Adq_Tipo'] = val
 
-# ═══════════════════════════════════════════════════════════════════════════
-# FUNCIÓN DE CONVENIENCIA (compatibilidad con código original)
-# ═══════════════════════════════════════════════════════════════════════════
+        # 2. NOMBRE (Lógica Simplificada)
+        m = re.search(r'(?:Nombre o )?Razón Social:\s*([^\n]+)', txt)
+        if m:
+            nombre_full = m.group(1)
+            self._procesar_nombre_adquiriente(nombre_full, datos)
+
+        # 3. OTROS DATOS
+        m = re.search(r'Número Documento:\s*([\d\.-]+)', txt); 
+        if m: datos['Adq_NumeroDocumento'] = m.group(1)
+        m = re.search(r'Tipo de Documento:\s*(.+)', txt); 
+        if m: datos['Adq_TipoDocumento'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Dirección:\s*([^\n]+)', txt); 
+        if m: datos['Adq_Direccion'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Municipio / Ciudad:\s*([^\n]+)', txt); 
+        if m: datos['Adq_Municipio'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Departamento:\s*([^\n]+)', txt); 
+        if m: datos['Adq_Departamento'] = self.limpiar_texto(m.group(1))
+        m = re.search(r'Correo:\s*([^\n]+)', txt); 
+        if m: datos['Adq_Correo'] = self.limpiar_texto(m.group(1))
+
+    def _extraer_totales(self, datos, texto):
+        patrones = {
+            'Subtotal': [r'Subtotal\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', r'"Subtotal\s*",,"([\d\.,]+)'],
+            'Total_Factura': [r'Total factura\s*\(=\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', r'Total a Pagar.*?([\d\.,]+)'],
+            'IVA': [r'Total impuesto.*?(=).*?([\d\.,]+)', r'IVA\s+([\d,\.]+)'],
+            'Rete_Fuente': [r'Rete fuente\s*"?([\d\.,]+)"?', r'Retención en la fuente.*?([\d\.,]+)'],
+            'Rete_ICA': [r'Rete ICA\s*"?([\d\.,]+)"?'],
+            'Rete_IVA': [r'Rete IVA\s*"?([\d\.,]+)"?']
+        }
+        for campo, lista_regex in patrones.items():
+            for regex in lista_regex:
+                m = re.search(regex, texto, re.IGNORECASE | re.DOTALL)
+                if m:
+                    datos[campo] = self.limpiar_monto(m.group(m.lastindex))
+                    break
 
 def extraer_datos_pdf(ruta_pdf, cufe_original, numero):
-    """
-    Función wrapper para mantener compatibilidad con código original
-    
-    Args:
-        ruta_pdf: Ruta del archivo PDF
-        cufe_original: CUFE original
-        numero: Número secuencial
-        
-    Returns:
-        Diccionario con datos extraídos
-    """
     extractor = ExtractorPDF()
     return extractor.extraer_datos(ruta_pdf, cufe_original, numero)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TESTING
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("🧪 PROBANDO EXTRACTOR DE PDF")
-    print("="*70 + "\n")
-    
-    # Probar con un PDF de ejemplo (si existe)
-    import sys
-    if len(sys.argv) > 1:
-        ruta_pdf = sys.argv[1]
-        print(f"📄 Extrayendo datos de: {ruta_pdf}\n")
-        
-        datos = extraer_datos_pdf(ruta_pdf, "TEST_CUFE", 1)
-        
-        print("✅ Datos extraídos:")
-        for clave, valor in datos.items():
-            if valor:  # Solo mostrar campos con datos
-                print(f"  • {clave}: {valor}")
-    else:
-        print("ℹ️  Uso: python3 extractor.py <ruta_pdf>")
-    
-    print("\n" + "="*70 + "\n")

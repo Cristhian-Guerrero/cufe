@@ -49,3 +49,13 @@ main_v3.py
 .~lock.*
 test_validacion.txt
 logs/*.log
+
+# Backups y archivos temporales
+*_backup*.py
+*_BACKUP*.py
+*_copy*.py
+* copy.py
+main_v3.5.py
+qq
+CloudflareBypass.py
+

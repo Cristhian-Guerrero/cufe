@@ -2,7 +2,7 @@
 ═══════════════════════════════════════════════════════════════════════════
 ORQUESTADOR - CUFE DIAN AUTOMATION
 Coordina la ejecución paralela de navegadores, reintentos y extractor
-v3.5.3 - Navegador de reintentos SIEMPRE LISTO (igual que backup v3.3)
+v3.5.4 - Con callbacks de progreso para GUI
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -15,17 +15,61 @@ from core.extractor import extraer_datos_pdf
 from core.excel_generator import generar_excel_final
 
 
+# Variable global para callbacks
+_callback_progreso = None
+_callback_mensaje = None
+_contador_procesados = 0
+_lock_contador = threading.Lock()
+_total_cufes = 0
+_stop_signal = threading.Event()
+
+
+def configurar_callbacks(callback_progreso=None, callback_mensaje=None):
+    global _callback_progreso, _callback_mensaje
+    _callback_progreso = callback_progreso
+    _callback_mensaje = callback_mensaje
+
+
+def detener_sistema():
+    global _stop_signal
+    _stop_signal.set()
+
+
+def _notificar_progreso():
+    global _contador_procesados, _total_cufes, _callback_progreso
+    
+    with _lock_contador:
+        _contador_procesados += 1
+        actual = _contador_procesados
+    
+    if _callback_progreso and _total_cufes > 0:
+        porcentaje = int((actual / _total_cufes) * 100)
+        try:
+            _callback_progreso(porcentaje, actual, _total_cufes)
+        except:
+            pass
+
+
+def _notificar_mensaje(mensaje, tipo="info"):
+    global _callback_mensaje
+    if _callback_mensaje:
+        try:
+            _callback_mensaje(mensaje, tipo)
+        except:
+            pass
+
+
 def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_reintentos: queue.Queue,
                        cola_pdfs: queue.Queue, cola_resultados: queue.Queue,
                        navegadores_activos: list, dian_url: str, carpeta_pdfs: str,
                        max_reintentos: int):
-    """
-    Worker que descarga CUFEs en paralelo
-    """
     page = None
     bypass = None
     
     try:
+        if nav_id == 1:
+            _notificar_mensaje("Conectando con el portal DIAN...", "info")
+        
         page, bypass = inicializar_navegador(nav_id, carpeta_pdfs, dian_url)
         
         if page is None:
@@ -34,7 +78,14 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_reintentos:
         
         navegadores_activos.append(page)
         
+        if nav_id == 1:
+            _notificar_mensaje("Conexión establecida", "success")
+        
         while True:
+            if _stop_signal.is_set():
+                log(nav_id, "⏹️ Detenido por usuario", "WARN")
+                break
+            
             try:
                 item = cola_trabajo.get(timeout=3)
                 
@@ -43,6 +94,8 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_reintentos:
                     break
                 
                 cufe, numero, total = item
+                
+                _notificar_mensaje(f"Consultando factura {numero} de {total}...", "info")
                 
                 resultado = descargar_cufe(
                     page, bypass, cufe, numero, total, nav_id,
@@ -54,6 +107,7 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_reintentos:
                     cola_reintentos.put((cufe, numero, total))
                 else:
                     cola_resultados.put(resultado)
+                    _notificar_progreso()
                     
                     if resultado['estado'] == 'exitoso' and resultado['ruta_pdf']:
                         cola_pdfs.put({
@@ -62,6 +116,9 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_reintentos:
                             'ruta_pdf': resultado['ruta_pdf']
                         })
                         log(nav_id, "→ PDF enviado a extractor", "DEBUG")
+                        _notificar_mensaje(f"Factura {numero} descargada", "success")
+                    elif resultado['estado'] == 'no_encontrado':
+                        _notificar_mensaje(f"Factura {numero}: No registrada en DIAN", "warning")
                 
                 time.sleep(3)
                 
@@ -88,17 +145,8 @@ def procesador_reintentos(nav_id: int, cola_reintentos: queue.Queue, cola_pdfs: 
                          cola_resultados: queue.Queue, navegadores_activos: list,
                          dian_url: str, carpeta_pdfs: str, max_reintentos: int,
                          intentos_por_cufe: dict, lock_reintentos: threading.Lock):
-    """
-    Worker dedicado a procesar reintentos - IGUAL QUE BACKUP v3.3
-    
-    IMPORTANTE:
-    - El navegador se inicia INMEDIATAMENTE y queda listo
-    - Procesa reintentos TAN PRONTO como llegan a la cola
-    - No espera a que los principales terminen
-    """
     log(nav_id, "🔄 Procesador de reintentos iniciado", "RETRY")
     
-    # INICIAR NAVEGADOR INMEDIATAMENTE - igual que backup v3.3
     page, bypass = inicializar_navegador(nav_id, carpeta_pdfs, dian_url)
     
     if page is None:
@@ -108,10 +156,12 @@ def procesador_reintentos(nav_id: int, cola_reintentos: queue.Queue, cola_pdfs: 
     navegadores_activos.append(page)
     procesados = 0
     
-    # Ciclo principal - espera y procesa reintentos
     while True:
+        if _stop_signal.is_set():
+            log(nav_id, "⏹️ Detenido por usuario", "WARN")
+            break
+        
         try:
-            # Esperar item con timeout de 10s (igual que backup v3.3)
             item = cola_reintentos.get(timeout=10)
             
             if item is None:
@@ -120,14 +170,13 @@ def procesador_reintentos(nav_id: int, cola_reintentos: queue.Queue, cola_pdfs: 
             
             cufe, numero, total = item
             
-            # Tracking de intentos
             with lock_reintentos:
                 intento_actual = intentos_por_cufe.get(cufe, 1) + 1
                 intentos_por_cufe[cufe] = intento_actual
             
             log(nav_id, f"🔄 Reintentando CUFE #{numero} (intento {intento_actual}/{max_reintentos})", "RETRY")
+            _notificar_mensaje(f"Verificando factura {numero}...", "warning")
             
-            # Reintentar descarga
             resultado = descargar_cufe(
                 page, bypass, cufe, numero, total, nav_id,
                 carpeta_pdfs, intento=intento_actual, max_reintentos=max_reintentos
@@ -135,16 +184,15 @@ def procesador_reintentos(nav_id: int, cola_reintentos: queue.Queue, cola_pdfs: 
             
             resultado['intento'] = intento_actual
             
-            # Si falló de nuevo y puede reintentar
             if resultado['estado'] == 'retry' and intento_actual < max_reintentos:
                 log(nav_id, f"⚠️ Falló de nuevo, reintentando...", "RETRY")
                 cola_reintentos.put((cufe, numero, total))
             else:
-                # Éxito o fallo definitivo
                 if resultado['estado'] == 'retry':
                     resultado['estado'] = 'error'
                 
                 cola_resultados.put(resultado)
+                _notificar_progreso()
                 
                 if resultado['estado'] == 'exitoso' and resultado['ruta_pdf']:
                     cola_pdfs.put({
@@ -153,22 +201,20 @@ def procesador_reintentos(nav_id: int, cola_reintentos: queue.Queue, cola_pdfs: 
                         'ruta_pdf': resultado['ruta_pdf']
                     })
                     log(nav_id, "✅ REINTENTO EXITOSO", "OK")
+                    _notificar_mensaje(f"Factura {numero} recuperada", "success")
             
             procesados += 1
             time.sleep(3)
             
         except queue.Empty:
-            # Timeout - seguir esperando (no salir todavía)
             continue
         except Exception as e:
             log(nav_id, f"Error reintentos: {e}", "ERROR")
             break
     
-    # Mostrar estadísticas
     if procesados > 0:
         log(nav_id, f"✓ Procesados {procesados} reintentos", "RETRY")
     
-    # Cerrar navegador
     try:
         page.quit()
         if page in navegadores_activos:
@@ -180,13 +226,13 @@ def procesador_reintentos(nav_id: int, cola_reintentos: queue.Queue, cola_pdfs: 
 
 def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list, 
                         lock_excel: threading.Lock):
-    """
-    Worker que extrae datos de PDFs
-    """
     log(99, "🔍 Extractor iniciado", "OK")
     procesados = 0
     
     while True:
+        if _stop_signal.is_set():
+            break
+        
         try:
             item = cola_pdfs.get(timeout=5)
             
@@ -214,43 +260,43 @@ def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list,
             log(99, f"Error: {e}", "ERROR")
 
 
-def ejecutar_sistema(cufes: list, config: dict):
-    """
-    Función principal que ejecuta todo el sistema
-    """
-    # Configuración
+def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback_mensaje=None):
+    global _contador_procesados, _total_cufes, _stop_signal
+    
+    _contador_procesados = 0
+    _total_cufes = len(cufes)
+    _stop_signal.clear()
+    
+    configurar_callbacks(callback_progreso, callback_mensaje)
+    
     DIAN_URL = config['dian_url']
     CARPETA_PDFS = config['carpeta_pdfs']
     ARCHIVO_EXCEL = config['archivo_excel']
     NUM_NAVEGADORES = min(len(cufes), config['num_navegadores'])
     MAX_REINTENTOS = config['max_reintentos']
     
-    # Colas
+    _notificar_mensaje(f"Preparando consulta de {len(cufes)} facturas...", "info")
+    
     cola_trabajo = queue.Queue()
     cola_reintentos = queue.Queue()
     cola_pdfs = queue.Queue()
     cola_resultados = queue.Queue()
     
-    # Locks
     lock_excel = threading.Lock()
     lock_reintentos = threading.Lock()
     
-    # Estado
     navegadores_activos = []
     datos_completos = []
     intentos_por_cufe = {}
     
-    # Llenar cola de trabajo
     for i, cufe in enumerate(cufes, 1):
         cola_trabajo.put((cufe, i, len(cufes)))
     
     for _ in range(NUM_NAVEGADORES):
         cola_trabajo.put(None)
     
-    # Crear threads
     threads = []
     
-    # Navegadores principales
     for i in range(1, NUM_NAVEGADORES + 1):
         t = threading.Thread(
             target=trabajador_descarga,
@@ -259,7 +305,6 @@ def ejecutar_sistema(cufes: list, config: dict):
         )
         threads.append(t)
     
-    # Navegador de reintentos - SIEMPRE LISTO
     t_reintentos = threading.Thread(
         target=procesador_reintentos,
         args=(98, cola_reintentos, cola_pdfs, cola_resultados, navegadores_activos,
@@ -267,49 +312,47 @@ def ejecutar_sistema(cufes: list, config: dict):
     )
     threads.append(t_reintentos)
     
-    # Extractor
     t_extractor = threading.Thread(
         target=trabajador_extractor,
         args=(cola_pdfs, datos_completos, lock_excel)
     )
     threads.append(t_extractor)
     
-    # Iniciar todos
     tiempo_inicio = time.time()
     log(0, "🎬 Iniciando...", "OK")
     
     for t in threads:
         t.start()
     
-    # Esperar navegadores principales
     for t in threads[:NUM_NAVEGADORES]:
         t.join()
     
     log(0, "✓ Descargas principales completadas", "OK")
+    _notificar_mensaje("Consultas completadas", "success")
     
-    # Señal de parada para reintentos
     cola_reintentos.put(None)
     t_reintentos.join()
     
     log(0, "✓ Reintentos completados", "OK")
     
-    # Parar extractor
     cola_pdfs.put(None)
     t_extractor.join()
     
     log(0, "✓ Extracción completada", "OK")
     
-    # Generar Excel
+    _notificar_mensaje("Generando reporte Excel...", "info")
     generar_excel_final(ARCHIVO_EXCEL, datos_completos)
+    _notificar_mensaje("Proceso finalizado", "success")
     
     duracion = time.time() - tiempo_inicio
     
-    # Recolectar resultados
     resultados = []
     while not cola_resultados.empty():
         resultados.append(cola_resultados.get())
             
     resultados.sort(key=lambda x: x['numero'])
+    
+    configurar_callbacks(None, None)
     
     return {
         'resultados': resultados,

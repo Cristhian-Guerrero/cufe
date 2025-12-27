@@ -1,5 +1,8 @@
 """
-Módulo ui - Interfaz gráfica (futuro)
+Módulo de Interfaz Gráfica - Sistema CUFE DIAN
 """
 
-__all__ = []
+from .app import ConsultaCUFEApp, main
+
+__all__ = ['ConsultaCUFEApp', 'main']
+__version__ = '4.0.0'

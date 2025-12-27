@@ -1,281 +1,211 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-GENERADOR DE EXCEL - CUFE DIAN AUTOMATION
-Genera Excel profesional con formato, hipervínculos y filtros
+GENERADOR DE EXCEL - CUFE DIAN AUTOMATION (ACCOUNTING CLEAN)
+v6.0 - Eliminadas columnas basura de nombres divididos
 ═══════════════════════════════════════════════════════════════════════════
 """
 
 import os
 import pandas as pd
+from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 from utils import log
 
-
 class GeneradorExcel:
-    """
-    Generador de archivos Excel con formato profesional
     
-    Características:
-    - Encabezados con formato
-    - Filas alternadas (cebra)
-    - Columnas con anchos personalizados
-    - Hipervínculos a PDFs
-    - Formato de moneda
-    - Filtros automáticos
-    """
-    
-    # Orden de columnas en el Excel
-    COLUMNAS_ORDEN = [
-        'Numero', 'Estado', 'Numero_Factura', 'Prefijo', 'Folio',
-        'Fecha_Emision', 'Fecha_Vencimiento',
-        'Emisor_RazonSocial', 'Emisor_NIT', 'Emisor_Ciudad', 'Emisor_Departamento',
-        'Emisor_Direccion', 'Emisor_Telefono', 'Emisor_Email',
-        'Receptor_RazonSocial', 'Receptor_NIT', 'Receptor_Ciudad', 'Receptor_Departamento',
-        'Receptor_Direccion', 'Receptor_Email',
-        'Subtotal', 'IVA', 'Total_Factura',
-        'Forma_Pago', 'Medio_Pago', 'Numero_Autorizacion',
-        'CUFE', 'Ruta_PDF', 'Notas'
+    # ESTRUCTURA DEFINITIVA Y SIMPLE
+    COLUMNAS_DEF = [
+        # GRUPO 0: CONTROL
+        ('Numero', 'N°', 6, 0), 
+        ('Estado', 'Estado', 12, 0),
+        ('Numero_Factura', 'Factura N°', 15, 0),
+        
+        # GRUPO 1: DATOS DEL DOCUMENTO
+        ('CUFE', 'CUFE', 25, 1), 
+        ('Fecha_Emision', 'Emisión', 12, 1), 
+        ('Fecha_Vencimiento', 'Vencimiento', 12, 1), 
+        ('Tipo_Operacion', 'Tipo Operación', 18, 1), 
+        ('Forma_Pago', 'Forma Pago', 15, 1), 
+        ('Medio_Pago', 'Medio Pago', 20, 1), 
+        
+        # GRUPO 2: EMISOR
+        ('Emisor_RazonSocial', 'Razón Social Vendedor', 35, 2), 
+        ('Emisor_NIT', 'NIT Vendedor', 15, 2),
+        ('Emisor_Departamento', 'Depto.', 15, 2), 
+        ('Emisor_Municipio', 'Ciudad', 15, 2), 
+        
+        # GRUPO 3: ADQUIRIENTE (CLIENTE) - SIMPLIFICADO
+        ('Adq_Tipo', 'Tipo Pers.', 12, 3), 
+        ('Adq_NumeroDocumento', 'NIT / CC Cliente', 15, 3), 
+        ('Adq_RazonSocial', 'RAZÓN SOCIAL / NOMBRE (LEGAL)', 40, 3), # EL CAMPO IMPORTANTE
+        ('Adq_NombreComercial', 'Nombre Comercial / Establecimiento', 35, 3), # EL CAMPO SECUNDARIO
+        ('Adq_Departamento', 'Depto.', 15, 3), 
+        ('Adq_Municipio', 'Ciudad', 15, 3), 
+        ('Adq_Direccion', 'Dirección', 30, 3), 
+        ('Adq_Correo', 'Email', 25, 3),
+        
+        # GRUPO 4: FINANCIERO
+        ('Subtotal', 'Subtotal', 16, 4), 
+        ('Total_Bruto', 'Total Bruto', 16, 4), 
+        ('IVA', 'IVA', 14, 4), 
+        ('INC', 'INC', 14, 4), 
+        ('Bolsas', 'Bolsas', 12, 4),
+        ('Total_Factura', 'TOTAL A PAGAR', 18, 4),
+        ('Anticipos', 'Anticipos', 14, 4), 
+        ('Rete_Fuente', 'ReteFuente', 14, 4), 
+        ('Rete_IVA', 'ReteIVA', 14, 4), 
+        ('Rete_ICA', 'ReteICA', 14, 4),
+        
+        # GRUPO 5: GESTIÓN
+        ('Ruta_PDF', 'Soporte', 12, 5), 
+        ('Notas', 'Observaciones', 30, 5)
     ]
-    
-    # Anchos personalizados por columna
-    ANCHOS_COLUMNAS = {
-        'A': 8, 'B': 12, 'C': 18, 'D': 10, 'E': 10,
-        'F': 14, 'G': 14, 'H': 35, 'I': 16, 'J': 20,
-        'K': 18, 'L': 35, 'M': 16, 'N': 30, 'O': 35,
-        'P': 16, 'Q': 20, 'R': 18, 'S': 35, 'T': 30,
-        'U': 15, 'V': 15, 'W': 15, 'X': 18, 'Y': 18,
-        'Z': 18, 'AA': 70, 'AB': 15, 'AC': 50
+
+    GRUPOS_INFO = {
+        0: {'titulo': 'CONTROL', 'color': '404040', 'texto': 'FFFFFF'},
+        1: {'titulo': 'DATOS DEL DOCUMENTO', 'color': '1F4E78', 'texto': 'FFFFFF'},
+        2: {'titulo': 'DATOS DEL EMISOR', 'color': '375623', 'texto': 'FFFFFF'},
+        3: {'titulo': 'DATOS DEL CLIENTE', 'color': '833C0C', 'texto': 'FFFFFF'},
+        4: {'titulo': 'DETALLE FINANCIERO', 'color': '5B3151', 'texto': 'FFFFFF'},
+        5: {'titulo': 'ADJUNTOS', 'color': '000000', 'texto': 'FFFFFF'}
     }
-    
+
     def __init__(self, nombre_archivo):
-        """
-        Inicializa el generador
-        
-        Args:
-            nombre_archivo: Nombre del archivo Excel a generar
-        """
         self.nombre_archivo = nombre_archivo
-    
+        self.fila_inicio_datos = 7 
+
     def generar(self, datos_completos):
-        """
-        Genera el Excel completo con datos y formato
-        
-        Args:
-            datos_completos: Lista de diccionarios con datos extraídos
-            
-        Returns:
-            bool: True si se generó correctamente
-        """
-        if not datos_completos:
-            log(98, "❌ No hay datos", "ERROR")
-            return False
-        
+        if not datos_completos: return False
         try:
-            # Ordenar por número
             datos_ordenados = sorted(datos_completos, key=lambda x: x.get('Numero', 999))
-            
-            # Crear DataFrame
+            claves_columnas = [col[0] for col in self.COLUMNAS_DEF]
             df = pd.DataFrame(datos_ordenados)
+            for clave in claves_columnas:
+                if clave not in df.columns: df[clave] = ""
+            df = df[claves_columnas]
             
-            # Reordenar columnas
-            df = df[self.COLUMNAS_ORDEN]
+            with pd.ExcelWriter(self.nombre_archivo, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, header=False, sheet_name='Reporte DIAN', startrow=self.fila_inicio_datos-1)
             
-            # Guardar Excel básico
-            df.to_excel(self.nombre_archivo, index=False, sheet_name='Facturas')
-            log(98, "✓ Datos guardados", "OK")
-            
-            # Aplicar formato profesional
-            self._aplicar_formato(datos_completos)
-            log(98, "✅ Excel profesional generado", "OK")
-            
+            self._aplicar_diseno_premium(df)
             return True
-            
         except Exception as e:
             log(98, f"❌ Error generando Excel: {e}", "ERROR")
             return False
     
-    def _aplicar_formato(self, datos_completos):
-        """
-        Aplica formato profesional al Excel
-        
-        Args:
-            datos_completos: Datos originales (para hipervínculos)
-        """
+    def _aplicar_diseno_premium(self, df):
         try:
             wb = load_workbook(self.nombre_archivo)
             ws = wb.active
             
-            # Estilos
-            fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-            font_header = Font(bold=True, color="FFFFFF", size=12, name='Calibri')
-            align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            # ESTILOS
+            font_dashboard_lbl = Font(name='Segoe UI', size=9, color="666666")
+            font_dashboard_val = Font(name='Segoe UI', size=14, bold=True, color="1F4E78")
+            font_grupo = Font(name='Segoe UI', size=10, bold=True, color="FFFFFF")
+            font_header = Font(name='Segoe UI', size=9, bold=True, color="FFFFFF")
+            font_data = Font(name='Segoe UI', size=9)
             
-            borde_grueso = Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
+            border_thin = Side(style='thin', color="BFBFBF")
+            border_med = Side(style='medium', color="FFFFFF")
+            borde_cuadro = Border(left=border_thin, right=border_thin, top=border_thin, bottom=border_thin)
             
-            fill_par = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-            fill_impar = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+            align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+            # DASHBOARD MINIMALISTA
+            ws['B2'] = "REPORTE CONTABLE DE FACTURAS"
+            ws['B2'].font = Font(name='Segoe UI', size=16, bold=True, color="404040")
             
-            align_centro = Alignment(horizontal='center', vertical='center')
-            align_izquierda = Alignment(horizontal='left', vertical='center')
-            align_derecha = Alignment(horizontal='right', vertical='center')
+            ws['B3'] = "TOTAL DOCUMENTOS"
+            ws['B3'].font = font_dashboard_lbl
+            ws['B3'].alignment = align_center
+            ws['B4'] = len(df)
+            ws['B4'].font = font_dashboard_val
+            ws['B4'].alignment = align_center
+            ws['B4'].border = Border(bottom=Side(style='thick', color="1F4E78"))
             
-            # Formatear encabezados
-            for cell in ws[1]:
-                cell.fill = fill_header
-                cell.font = font_header
-                cell.alignment = align_header
-                cell.border = borde_grueso
-            
-            # Anchos de columnas
-            for col, ancho in self.ANCHOS_COLUMNAS.items():
-                ws.column_dimensions[col].width = ancho
-            
-            # Encontrar columnas especiales
-            col_estado = None
-            col_pdf = None
-            col_subtotal = None
-            col_iva = None
-            col_total = None
-            
-            for idx, cell in enumerate(ws[1], 1):
-                if cell.value == 'Estado':
-                    col_estado = idx
-                elif cell.value == 'Ruta_PDF':
-                    col_pdf = idx
-                elif cell.value == 'Subtotal':
-                    col_subtotal = idx
-                elif cell.value == 'IVA':
-                    col_iva = idx
-                elif cell.value == 'Total_Factura':
-                    col_total = idx
-            
-            # Formatear filas de datos
-            for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
-                fill = fill_par if row_idx % 2 == 0 else fill_impar
+            ws['D3'] = "FECHA GENERACIÓN"
+            ws['D3'].font = font_dashboard_lbl
+            ws['D3'].alignment = align_center
+            ws['D4'] = datetime.now().strftime("%d/%m/%Y %H:%M")
+            ws['D4'].font = Font(name='Segoe UI', size=11, bold=True, color="404040")
+            ws['D4'].alignment = align_center
+            ws['D4'].border = Border(bottom=Side(style='thick', color="1F4E78"))
+
+            # HEADERS AGRUPADOS
+            col_idx = 1
+            for grp_id, info in self.GRUPOS_INFO.items():
+                cols_grupo = [c for c in self.COLUMNAS_DEF if c[3] == grp_id]
+                if not cols_grupo: continue
                 
-                for cell_idx, cell in enumerate(row, 1):
-                    cell.border = borde_grueso
-                    cell.fill = fill
+                start_col = col_idx
+                end_col = col_idx + len(cols_grupo) - 1
+                ws.merge_cells(start_row=5, start_column=start_col, end_row=5, end_column=end_col)
+                cell = ws.cell(row=5, column=start_col)
+                cell.value = info['titulo']
+                cell.font = font_grupo
+                cell.fill = PatternFill(start_color=info['color'], end_color=info['color'], fill_type="solid")
+                cell.alignment = align_center
+                cell.border = Border(right=border_med, left=border_med)
+                col_idx += len(cols_grupo)
+
+            # HEADERS COLUMNAS
+            col_idx = 1
+            for def_col in self.COLUMNAS_DEF:
+                grp_id = def_col[3]
+                color_base = self.GRUPOS_INFO[grp_id]['color']
+                cell = ws.cell(row=6, column=col_idx)
+                cell.value = def_col[1]
+                cell.fill = PatternFill(start_color=color_base, end_color=color_base, fill_type="solid")
+                cell.font = font_header
+                cell.alignment = align_center
+                cell.border = borde_cuadro
+                ws.column_dimensions[get_column_letter(col_idx)].width = def_col[2]
+                col_idx += 1
+            
+            ws.row_dimensions[5].height = 25
+            ws.row_dimensions[6].height = 35
+
+            # DATOS
+            cols_moneda = [i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[3] == 4]
+            col_pdf = [i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Ruta_PDF'][0]
+            col_factura = [i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Numero_Factura'][0]
+
+            for row in ws.iter_rows(min_row=self.fila_inicio_datos):
+                fill = PatternFill(start_color="F9F9F9", end_color="F9F9F9", fill_type="solid") if row[0].row % 2 == 0 else None
+                for cell in row:
+                    if fill: cell.fill = fill
+                    cell.font = font_data
+                    cell.border = borde_cuadro
+                    cell.alignment = Alignment(vertical='center')
                     
-                    # Formato según columna
-                    if cell_idx == 1:  # Número
-                        cell.alignment = align_centro
-                        cell.font = Font(bold=True, size=11)
-                    elif cell_idx == col_estado:  # Estado
-                        cell.alignment = align_centro
-                        cell.font = Font(size=11)
-                    elif cell_idx in [col_subtotal, col_iva, col_total]:  # Valores monetarios
-                        cell.alignment = align_derecha
-                        cell.number_format = '$#,##0.00'
-                        cell.font = Font(bold=True if cell_idx == col_total else False, size=11)
-                    else:
-                        cell.alignment = align_izquierda
+                    if cell.col_idx in cols_moneda:
+                        cell.number_format = '_-$ * #,##0.00_-;-$ * #,##0.00_-;_-;_-@'
+                        cell.alignment = Alignment(horizontal='right', vertical='center')
                     
-                    # Hipervínculo a PDF
-                    if cell_idx == col_pdf:
-                        for dato in datos_completos:
-                            if dato.get('Numero') == row_idx - 1:
-                                ruta_real = dato.get('Ruta_PDF', '')
-                                if ruta_real and os.path.exists(ruta_real):
-                                    cell.hyperlink = f"file:///{ruta_real.replace(os.sep, '/')}"
-                                    cell.value = "📄 Ver PDF"
-                                    cell.font = Font(color="0000FF", underline="single", size=11)
-                                    cell.alignment = align_centro
-                                break
-            
-            # Congelar primera fila
-            ws.freeze_panes = 'A2'
-            
-            # Altura de filas
-            ws.row_dimensions[1].height = 30
-            for row_idx in range(2, ws.max_row + 1):
-                ws.row_dimensions[row_idx].height = 20
-            
-            # Filtros automáticos
-            ws.auto_filter.ref = ws.dimensions
-            
-            # Guardar
+                    if cell.col_idx == col_factura:
+                        cell.font = Font(name='Segoe UI', size=9, bold=True)
+                        cell.alignment = align_center
+                    
+                    if cell.col_idx == col_pdf:
+                        path = cell.value
+                        if path and isinstance(path, str) and os.path.exists(path):
+                            cell.value = "Abrir PDF"
+                            cell.hyperlink = path
+                            cell.font = Font(name='Segoe UI', size=9, color="0000FF", underline="single", bold=True)
+                            cell.alignment = align_center
+                        elif not path:
+                            cell.value = "-"
+                            cell.alignment = align_center
+
+            ws.freeze_panes = 'D7' 
+            ws.auto_filter.ref = f"A6:{get_column_letter(len(self.COLUMNAS_DEF))}{ws.max_row}"
             wb.save(self.nombre_archivo)
-            log(98, "✓ Formato aplicado", "OK")
             
         except Exception as e:
-            log(98, f"Error formato: {e}", "ERROR")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# FUNCIÓN DE CONVENIENCIA (compatibilidad con código original)
-# ═══════════════════════════════════════════════════════════════════════════
+            log(98, f"Error formato visual Pro: {e}", "ERROR")
 
 def generar_excel_final(nombre_archivo, datos_completos):
-    """
-    Función wrapper para mantener compatibilidad con código original
-    
-    Args:
-        nombre_archivo: Nombre del archivo Excel
-        datos_completos: Lista de datos extraídos
-        
-    Returns:
-        bool: True si se generó correctamente
-    """
     generador = GeneradorExcel(nombre_archivo)
     return generador.generar(datos_completos)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TESTING
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("🧪 PROBANDO GENERADOR DE EXCEL")
-    print("="*70 + "\n")
-    
-    # Datos de prueba
-    datos_test = [
-        {
-            'Numero': 1,
-            'Estado': '✅ Procesado',
-            'Numero_Factura': 'FE-001',
-            'Prefijo': 'FE',
-            'Folio': '001',
-            'Fecha_Emision': '01/01/2025',
-            'Fecha_Vencimiento': '31/01/2025',
-            'Emisor_RazonSocial': 'Empresa Test SAS',
-            'Emisor_NIT': '900123456-1',
-            'Emisor_Ciudad': 'Bogotá',
-            'Emisor_Departamento': 'Cundinamarca',
-            'Emisor_Direccion': 'Calle 123 #45-67',
-            'Emisor_Telefono': '3001234567',
-            'Emisor_Email': 'test@empresa.com',
-            'Receptor_RazonSocial': 'Cliente Test',
-            'Receptor_NIT': '123456789',
-            'Receptor_Ciudad': 'Medellín',
-            'Receptor_Departamento': 'Antioquia',
-            'Receptor_Direccion': 'Carrera 10 #20-30',
-            'Receptor_Email': 'cliente@test.com',
-            'Subtotal': '100000',
-            'IVA': '19000',
-            'Total_Factura': '119000',
-            'Forma_Pago': 'Contado',
-            'Medio_Pago': 'Efectivo',
-            'Numero_Autorizacion': '123456',
-            'CUFE': 'abc123def456...',
-            'Ruta_PDF': '/tmp/test.pdf',
-            'Notas': ''
-        }
-    ]
-    
-    # Generar Excel de prueba
-    generador = GeneradorExcel('Test_Excel.xlsx')
-    if generador.generar(datos_test):
-        print("✅ Excel de prueba generado: Test_Excel.xlsx")
-    else:
-        print("❌ Error generando Excel de prueba")
-    
-    print("\n" + "="*70 + "\n")
