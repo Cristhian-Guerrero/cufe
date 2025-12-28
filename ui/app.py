@@ -1,6 +1,7 @@
 """
-Sistema de Consulta CUFE DIAN - Interfaz Gráfica v4.0.0
-A.S. Contadores & Asesores SAS
+Sistema de Consulta CUFE DIAN - Interfaz Gráfica v4.2.0
+Desarrollado por C.G. (Cristhian Guerrero)
+Para: A.S. Contadores & Asesores SAS
 Pasto, Nariño - Colombia
 """
 
@@ -33,17 +34,18 @@ except ImportError as e:
 
 APP_CONFIG = {
     'title': 'Sistema de Consulta CUFE | A.S. Contadores & Asesores SAS',
-    'version': '4.0.0',
+    'version': '4.2.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño - Colombia',
-    'min_width': 900,
-    'min_height': 700,
+    'developer': '© C. Guerrero',
+    'width': 900,
+    'height': 720,
     'max_navegadores': 10,
 }
 
 
 class ConsultaCUFEApp(tk.Tk):
-    """Interfaz Profesional para Consulta CUFE DIAN"""
+    """Interfaz Profesional para Consulta CUFE DIAN - v4.2.0 Rediseñada"""
     
     def __init__(self):
         super().__init__()
@@ -67,16 +69,18 @@ class ConsultaCUFEApp(tk.Tk):
             'error': '#C62828',
             'border': '#E0E0E0',
             'disabled': '#BDBDBD',
+            'input_bg': '#F8F9FA',
         }
         
         self.FONTS = {
-            'title': ('Arial', 20, 'bold'),
-            'subtitle': ('Arial', 12),
-            'section': ('Arial', 11, 'bold'),
+            'title': ('Arial', 18, 'bold'),
+            'subtitle': ('Arial', 11),
+            'section': ('Arial', 10, 'bold'),
             'body': ('Arial', 10),
-            'button': ('Arial', 10, 'bold'),
+            'button': ('Arial', 9, 'bold'),
             'small': ('Arial', 9),
             'log': ('Consolas', 9),
+            'porcentaje': ('Arial', 36, 'bold'),
         }
         
         # Variables de estado
@@ -94,8 +98,9 @@ class ConsultaCUFEApp(tk.Tk):
         
         self.log_queue = queue.Queue()
         
-        self.geometry(f"{APP_CONFIG['min_width']}x{APP_CONFIG['min_height']}")
-        self.minsize(APP_CONFIG['min_width'], APP_CONFIG['min_height'])
+        # Tamaño fijo (no redimensionable para evitar problemas de layout)
+        self.geometry(f"{APP_CONFIG['width']}x{APP_CONFIG['height']}")
+        self.resizable(False, False)
         self.configure(bg=self.COLORS['background'])
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
@@ -114,8 +119,8 @@ class ConsultaCUFEApp(tk.Tk):
     
     def center_window(self):
         self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
+        width = APP_CONFIG['width']
+        height = APP_CONFIG['height']
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f'{width}x{height}+{x}+{y}')
@@ -147,7 +152,7 @@ class ConsultaCUFEApp(tk.Tk):
         except Exception as e:
             print(f"Aviso: No se pudo cargar el ícono: {e}")
     
-    def load_logo(self, max_width=350, max_height=80):
+    def load_logo(self, max_width=280, max_height=60):
         try:
             logo_path = self.resource_path("assets/logo.png")
             if not os.path.exists(logo_path):
@@ -201,7 +206,7 @@ class ConsultaCUFEApp(tk.Tk):
         
         self.style.configure('Primary.TButton', background=self.COLORS['primary'],
                            foreground=self.COLORS['text_light'], font=self.FONTS['button'],
-                           padding=(20, 10))
+                           padding=(15, 8))
         self.style.map('Primary.TButton',
                       background=[('active', self.COLORS['primary_light']),
                                 ('pressed', self.COLORS['primary_dark']),
@@ -209,26 +214,22 @@ class ConsultaCUFEApp(tk.Tk):
         
         self.style.configure('Secondary.TButton', background=self.COLORS['text_secondary'],
                            foreground=self.COLORS['text_light'], font=self.FONTS['button'],
-                           padding=(15, 8))
+                           padding=(10, 6))
         self.style.map('Secondary.TButton',
                       background=[('active', '#757575'), ('disabled', self.COLORS['disabled'])])
         
         self.style.configure('Success.TButton', background=self.COLORS['success'],
                            foreground=self.COLORS['text_light'], font=self.FONTS['button'],
-                           padding=(20, 10))
+                           padding=(15, 8))
         self.style.map('Success.TButton',
                       background=[('active', self.COLORS['primary_light']),
                                 ('disabled', self.COLORS['disabled'])])
         
         self.style.configure('Danger.TButton', background=self.COLORS['error'],
                            foreground=self.COLORS['text_light'], font=self.FONTS['button'],
-                           padding=(15, 8))
+                           padding=(10, 6))
         self.style.map('Danger.TButton',
                       background=[('active', '#EF5350'), ('disabled', self.COLORS['disabled'])])
-        
-        self.style.configure('Green.Horizontal.TProgressbar',
-                           background=self.COLORS['primary'],
-                           troughcolor=self.COLORS['border'], thickness=25)
     
     def create_ui(self):
         self.create_header()
@@ -240,9 +241,9 @@ class ConsultaCUFEApp(tk.Tk):
         header.pack(fill=tk.X)
         
         header_content = ttk.Frame(header, style='Header.TFrame')
-        header_content.pack(fill=tk.X, padx=25, pady=15)
+        header_content.pack(fill=tk.X, padx=20, pady=10)
         
-        logo = self.load_logo(max_width=320, max_height=70)
+        logo = self.load_logo(max_width=280, max_height=55)
         if logo:
             self._logo_ref = logo
             logo_label = ttk.Label(header_content, image=logo, style='Header.TLabel')
@@ -263,226 +264,248 @@ class ConsultaCUFEApp(tk.Tk):
     
     def create_main_content(self):
         main = ttk.Frame(self, style='Main.TFrame')
-        main.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
+        main.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
         
-        self.create_input_section(main)
-        self.create_output_section(main)
+        # Sección compacta de entrada/salida
+        self.create_io_section(main)
+        
+        # Validación compacta
         self.create_validation_section(main)
+        
+        # Controles
         self.create_controls_section(main)
+        
+        # Progreso con barra animada
         self.create_progress_section(main)
+        
+        # Log expandido
         self.create_log_section(main)
     
-    def create_input_section(self, parent):
-        frame = ttk.LabelFrame(parent, text="  Archivo de Entrada  ", 
-                              style='Card.TLabelframe', padding=15)
-        frame.pack(fill=tk.X, pady=(0, 10))
-        
-        content = ttk.Frame(frame, style='Card.TFrame')
-        content.pack(fill=tk.X)
-        
-        self.entry_archivo = ttk.Entry(content, textvariable=self.archivo_entrada,
-                                       state='readonly', font=self.FONTS['body'])
-        self.entry_archivo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        
-        self.btn_seleccionar = ttk.Button(content, text="Seleccionar Archivo",
-                                         command=self.seleccionar_archivo, style='Primary.TButton')
-        self.btn_seleccionar.pack(side=tk.RIGHT)
-        
-        help_label = ttk.Label(frame,
-                              text="Formatos admitidos: Excel (.xlsx) o Texto (.txt) con listado de CUFEs",
-                              style='Small.TLabel')
-        help_label.pack(anchor='w', pady=(8, 0))
-    
-    def create_output_section(self, parent):
-        frame = ttk.LabelFrame(parent, text="  Carpeta de Salida  ", 
-                              style='Card.TLabelframe', padding=12)
-        frame.pack(fill=tk.X, pady=(0, 8))
-        
-        content = ttk.Frame(frame, style='Card.TFrame')
-        content.pack(fill=tk.X)
-        
-        self.entry_carpeta = tk.Entry(content, textvariable=self.carpeta_salida,
-                                      state='readonly', font=self.FONTS['body'],
-                                      bg='#E8F5E9', fg=self.COLORS['primary_dark'],
-                                      relief='flat', readonlybackground='#E8F5E9')
-        self.entry_carpeta.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-        
-        self.btn_carpeta = ttk.Button(content, text="Cambiar",
-                                     command=self.seleccionar_carpeta, style='Secondary.TButton')
-        self.btn_carpeta.pack(side=tk.RIGHT)
-        
-        ttk.Label(frame, text="Aquí se guardarán los PDFs y el reporte Excel",
-                 style='Small.TLabel').pack(anchor='w', pady=(5, 0))
-    
-    def create_validation_section(self, parent):
-        frame = ttk.LabelFrame(parent, text="  Validación de CUFEs  ", 
+    def create_io_section(self, parent):
+        """Sección compacta de entrada y salida en una sola card"""
+        frame = ttk.LabelFrame(parent, text="  Configuración  ", 
                               style='Card.TLabelframe', padding=10)
         frame.pack(fill=tk.X, pady=(0, 8))
         
-        stats_frame = ttk.Frame(frame, style='Card.TFrame')
-        stats_frame.pack(fill=tk.X)
+        # Fila 1: Archivo de entrada
+        row1 = ttk.Frame(frame, style='Card.TFrame')
+        row1.pack(fill=tk.X, pady=(0, 6))
         
-        self.lbl_validos = ttk.Label(stats_frame, text="Válidos: 0", style='Success.TLabel')
-        self.lbl_validos.pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Label(row1, text="Entrada:", style='Section.TLabel', width=8).pack(side=tk.LEFT)
         
-        self.lbl_invalidos = ttk.Label(stats_frame, text="Inválidos: 0", style='Error.TLabel')
-        self.lbl_invalidos.pack(side=tk.LEFT, padx=(0, 20))
+        self.entry_archivo = ttk.Entry(row1, textvariable=self.archivo_entrada,
+                                       state='readonly', font=self.FONTS['small'])
+        self.entry_archivo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 8))
         
-        self.lbl_duplicados = ttk.Label(stats_frame, text="Duplicados: 0", style='Small.TLabel')
-        self.lbl_duplicados.pack(side=tk.LEFT, padx=(0, 20))
+        self.btn_seleccionar = ttk.Button(row1, text="📁 Seleccionar",
+                                         command=self.seleccionar_archivo, style='Primary.TButton')
+        self.btn_seleccionar.pack(side=tk.RIGHT)
         
-        self.lbl_total = ttk.Label(stats_frame, text="Total a procesar: 0", style='Section.TLabel')
+        # Fila 2: Carpeta de salida
+        row2 = ttk.Frame(frame, style='Card.TFrame')
+        row2.pack(fill=tk.X)
+        
+        ttk.Label(row2, text="Salida:", style='Section.TLabel', width=8).pack(side=tk.LEFT)
+        
+        self.entry_carpeta = ttk.Entry(row2, textvariable=self.carpeta_salida,
+                                       state='readonly', font=self.FONTS['small'])
+        self.entry_carpeta.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 8))
+        
+        self.btn_carpeta = ttk.Button(row2, text="📁 Cambiar",
+                                     command=self.seleccionar_carpeta, style='Secondary.TButton')
+        self.btn_carpeta.pack(side=tk.RIGHT)
+    
+    def create_validation_section(self, parent):
+        """Sección de validación compacta en una línea"""
+        frame = ttk.Frame(parent, style='Card.TFrame')
+        frame.pack(fill=tk.X, pady=(0, 8))
+        
+        # Contenedor con borde
+        inner = tk.Frame(frame, bg=self.COLORS['surface'], relief='solid', bd=1)
+        inner.pack(fill=tk.X)
+        
+        content = tk.Frame(inner, bg=self.COLORS['surface'])
+        content.pack(fill=tk.X, padx=10, pady=6)
+        
+        self.lbl_validos = tk.Label(content, text="✓ Válidos: 0", 
+                                    font=self.FONTS['body'], fg=self.COLORS['success'],
+                                    bg=self.COLORS['surface'])
+        self.lbl_validos.pack(side=tk.LEFT, padx=(0, 15))
+        
+        self.lbl_invalidos = tk.Label(content, text="✗ Inválidos: 0", 
+                                      font=self.FONTS['body'], fg=self.COLORS['error'],
+                                      bg=self.COLORS['surface'])
+        self.lbl_invalidos.pack(side=tk.LEFT, padx=(0, 15))
+        
+        self.lbl_duplicados = tk.Label(content, text="⚠ Duplicados: 0", 
+                                       font=self.FONTS['body'], fg=self.COLORS['warning'],
+                                       bg=self.COLORS['surface'])
+        self.lbl_duplicados.pack(side=tk.LEFT)
+        
+        self.lbl_total = tk.Label(content, text="Total a procesar: 0", 
+                                  font=self.FONTS['section'], fg=self.COLORS['primary'],
+                                  bg=self.COLORS['surface'])
         self.lbl_total.pack(side=tk.RIGHT)
     
     def create_controls_section(self, parent):
+        """Botones de control"""
         frame = ttk.Frame(parent, style='Card.TFrame')
-        frame.pack(fill=tk.X, pady=(0, 10))
+        frame.pack(fill=tk.X, pady=(0, 8))
         
-        self.btn_iniciar = ttk.Button(frame, text="INICIAR PROCESO",
+        self.btn_iniciar = ttk.Button(frame, text="▶ INICIAR",
                                      command=self.iniciar_proceso, style='Success.TButton',
                                      state=tk.DISABLED)
-        self.btn_iniciar.pack(side=tk.LEFT, padx=(0, 15))
+        self.btn_iniciar.pack(side=tk.LEFT, padx=(0, 10))
         
-        self.btn_detener = ttk.Button(frame, text="DETENER PROCESO",
+        self.btn_detener = ttk.Button(frame, text="■ DETENER",
                                      command=self.detener_proceso, style='Danger.TButton',
                                      state=tk.DISABLED)
-        self.btn_detener.pack(side=tk.LEFT, padx=(0, 15))
+        self.btn_detener.pack(side=tk.LEFT)
         
-        self.btn_excel = ttk.Button(frame, text="GENERAR REPORTE EXCEL",
+        self.btn_excel = ttk.Button(frame, text="📊 ABRIR EXCEL",
                                    command=self.generar_excel, style='Primary.TButton',
                                    state=tk.DISABLED)
         self.btn_excel.pack(side=tk.RIGHT)
     
     def create_progress_section(self, parent):
+        """Sección de progreso con barra animada colorida"""
         frame = ttk.LabelFrame(parent, text="  Progreso  ", 
-                              style='Card.TLabelframe', padding=20)
-        frame.pack(fill=tk.X, pady=(0, 10))
+                              style='Card.TLabelframe', padding=12)
+        frame.pack(fill=tk.X, pady=(0, 8))
         
         # Porcentaje grande
-        self.lbl_porcentaje = tk.Label(frame, text="0%", font=('Arial', 42, 'bold'),
-                                       fg=self.COLORS['primary'], bg=self.COLORS['background'])
+        self.lbl_porcentaje = tk.Label(frame, text="0%", font=self.FONTS['porcentaje'],
+                                       fg=self.COLORS['text_secondary'], bg=self.COLORS['background'])
         self.lbl_porcentaje.pack()
         
-        # Estado actual (mensaje de lo que está haciendo)
+        # Estado actual
         self.lbl_estado = tk.Label(frame, text="Listo para iniciar",
-                                   font=('Arial', 11), fg=self.COLORS['text_secondary'],
+                                   font=self.FONTS['body'], fg=self.COLORS['text_secondary'],
                                    bg=self.COLORS['background'])
-        self.lbl_estado.pack(pady=(5, 15))
+        self.lbl_estado.pack(pady=(2, 10))
         
         # Frame para la barra personalizada
         barra_frame = tk.Frame(frame, bg=self.COLORS['background'])
-        barra_frame.pack(fill=tk.X, padx=20)
+        barra_frame.pack(fill=tk.X, padx=10)
         
-        # Barra de fondo (gris)
-        self.barra_fondo = tk.Canvas(barra_frame, height=30, bg='#E0E0E0',
-                                     highlightthickness=0, relief='flat')
+        # Barra de fondo con bordes redondeados (simulados)
+        self.barra_fondo = tk.Canvas(barra_frame, height=24, bg='#E8E8E8',
+                                     highlightthickness=1, highlightbackground='#D0D0D0')
         self.barra_fondo.pack(fill=tk.X)
         
         # Variables de progreso
         self.barra_progreso_valor = 0
-        self.barra_progreso_visual = 0.0  # Valor visual con decimales
-        self.barra_progreso_objetivo = 0.0  # Hacia donde va
+        self.barra_progreso_visual = 0.0
+        self.barra_progreso_objetivo = 0.0
         self.barra_ancho = 0
         
         # Contadores para progreso granular
-        self.progreso_base = 0  # Progreso de facturas completadas
-        self.progreso_parcial = 0.0  # Progreso dentro de una factura
-        self.fase_actual = 0  # Fase actual (0-5)
+        self.progreso_base = 0
+        self.progreso_parcial = 0.0
+        self.fase_actual = 0
         
         # Bind para redimensionar
         self.barra_fondo.bind('<Configure>', self._on_barra_resize)
         
-        # Texto de facturas procesadas
+        # Contador de facturas
         self.lbl_progreso = tk.Label(frame, text="0 de 0 facturas procesadas",
-                                    font=('Arial', 10), fg=self.COLORS['text_primary'],
+                                    font=self.FONTS['small'], fg=self.COLORS['text_secondary'],
                                     bg=self.COLORS['background'])
-        self.lbl_progreso.pack(pady=(15, 0))
+        self.lbl_progreso.pack(pady=(8, 0))
         
         # Variables para animación
         self.animacion_activa = False
         self.animacion_barra_activa = False
     
     def _on_barra_resize(self, event):
-        """Redibuja la barra cuando cambia el tamaño"""
-        self.barra_ancho = event.width
+        self.barra_ancho = event.width - 4
         self._dibujar_barra(self.barra_progreso_visual)
     
     def _dibujar_barra(self, porcentaje):
-        """Dibuja la barra de progreso con degradado"""
+        """Dibuja la barra de progreso con gradiente dinámico según el porcentaje"""
         self.barra_fondo.delete("all")
         
         if self.barra_ancho <= 0:
             return
         
-        altura = 30
+        altura = 20
+        margen = 2
         ancho_progreso = int((porcentaje / 100) * self.barra_ancho)
         
         if ancho_progreso > 0:
-            # Crear degradado verde
+            # Colores del gradiente según el porcentaje
+            if porcentaje < 30:
+                # Rojo -> Naranja
+                color_inicio = (220, 53, 69)    # Rojo
+                color_fin = (255, 152, 0)       # Naranja
+            elif porcentaje < 70:
+                # Naranja -> Amarillo verdoso
+                color_inicio = (255, 152, 0)    # Naranja
+                color_fin = (156, 204, 101)     # Verde claro
+            else:
+                # Verde claro -> Verde oscuro
+                color_inicio = (76, 175, 80)    # Verde
+                color_fin = (27, 94, 32)        # Verde oscuro
+            
+            # Dibujar gradiente horizontal
             for i in range(ancho_progreso):
                 ratio = i / max(ancho_progreso, 1)
-                r = int(46 + (76 - 46) * ratio)
-                g = int(125 + (175 - 125) * ratio)
-                b = int(50 + (80 - 50) * ratio)
+                r = int(color_inicio[0] + (color_fin[0] - color_inicio[0]) * ratio)
+                g = int(color_inicio[1] + (color_fin[1] - color_inicio[1]) * ratio)
+                b = int(color_inicio[2] + (color_fin[2] - color_inicio[2]) * ratio)
                 color = f'#{r:02x}{g:02x}{b:02x}'
-                self.barra_fondo.create_line(i, 0, i, altura, fill=color)
+                self.barra_fondo.create_line(i + margen, margen, i + margen, altura + margen, fill=color)
             
-            if ancho_progreso > 2:
-                self.barra_fondo.create_line(ancho_progreso-1, 0, ancho_progreso-1, altura, 
-                                            fill='#66BB6A', width=2)
+            # Efecto de brillo en la parte superior
+            if ancho_progreso > 5:
+                for i in range(min(ancho_progreso, self.barra_ancho)):
+                    brillo_ratio = 0.3 * (1 - (i / ancho_progreso) * 0.5)
+                    self.barra_fondo.create_line(
+                        i + margen, margen, i + margen, margen + 4,
+                        fill=f'#{int(255*brillo_ratio):02x}{int(255*brillo_ratio):02x}{int(255*brillo_ratio):02x}'
+                    )
     
     def _iniciar_animacion_barra(self):
-        """Inicia la animación suave de la barra"""
         if not self.animacion_barra_activa:
             self.animacion_barra_activa = True
             self._animar_barra()
     
     def _animar_barra(self):
-        """Anima la barra de forma suave hacia el objetivo"""
         if not self.animacion_barra_activa:
             return
         
-        # Movimiento suave hacia el objetivo
         diferencia = self.barra_progreso_objetivo - self.barra_progreso_visual
         
         if abs(diferencia) > 0.1:
-            # Incremento proporcional a la diferencia (más suave)
-            incremento = diferencia * 0.15
-            # Mínimo incremento para que siempre se mueva
-            if abs(incremento) < 0.3:
-                incremento = 0.3 if diferencia > 0 else -0.3
+            incremento = diferencia * 0.12
+            if abs(incremento) < 0.2:
+                incremento = 0.2 if diferencia > 0 else -0.2
             
             self.barra_progreso_visual += incremento
             
-            # No pasarse del objetivo
             if diferencia > 0 and self.barra_progreso_visual > self.barra_progreso_objetivo:
                 self.barra_progreso_visual = self.barra_progreso_objetivo
             elif diferencia < 0 and self.barra_progreso_visual < self.barra_progreso_objetivo:
                 self.barra_progreso_visual = self.barra_progreso_objetivo
             
-            # Actualizar visual
             porcentaje_mostrar = int(self.barra_progreso_visual)
             self._dibujar_barra(self.barra_progreso_visual)
             self.lbl_porcentaje.config(text=f"{porcentaje_mostrar}%")
             
-            # Color según avance
-            if porcentaje_mostrar >= 75:
-                self.lbl_porcentaje.config(fg='#1B5E20')
-            elif porcentaje_mostrar >= 40:
-                self.lbl_porcentaje.config(fg='#2E7D32')
+            # Color del texto según porcentaje
+            if porcentaje_mostrar < 30:
+                self.lbl_porcentaje.config(fg='#DC3545')  # Rojo
+            elif porcentaje_mostrar < 70:
+                self.lbl_porcentaje.config(fg='#FF9800')  # Naranja
             else:
-                self.lbl_porcentaje.config(fg='#4CAF50')
+                self.lbl_porcentaje.config(fg='#2E7D32')  # Verde
         
-        # Continuar animación
-        self.after(50, self._animar_barra)
+        self.after(40, self._animar_barra)
     
     def _detener_animacion_barra(self):
-        """Detiene la animación de la barra"""
         self.animacion_barra_activa = False
     
     def _calcular_progreso_por_fase(self, mensaje):
-        """Calcula el progreso basado en la fase del mensaje"""
-        # Pesos de cada fase (suman ~18% por factura aprox para 5 fases)
         fases = {
             'Conectando': 0.5,
             'Conexión establecida': 1.0,
@@ -506,23 +529,18 @@ class ConsultaCUFEApp(tk.Tk):
         return incremento
     
     def _actualizar_progreso_parcial(self, mensaje):
-        """Actualiza el progreso parcial basado en mensajes"""
         if not self.processing:
             return
         
-        # Calcular incremento basado en la fase
         incremento = self._calcular_progreso_por_fase(mensaje)
         
         if incremento > 0:
-            # Añadir algo de variación para que no sea tan predecible
             import random
             variacion = random.uniform(-0.3, 0.5)
             incremento += variacion
             
-            # Calcular nuevo objetivo
             nuevo_objetivo = self.barra_progreso_objetivo + incremento
             
-            # No pasarse del 99% hasta que realmente termine
             max_progreso = (self.progreso_base / max(self.total_procesar, 1)) * 100 + 15
             if nuevo_objetivo > min(99, max_progreso):
                 nuevo_objetivo = min(99, max_progreso)
@@ -530,8 +548,9 @@ class ConsultaCUFEApp(tk.Tk):
             self.barra_progreso_objetivo = nuevo_objetivo
     
     def create_log_section(self, parent):
+        """Sección de log expandida"""
         frame = ttk.LabelFrame(parent, text="  Registro de Actividad  ", 
-                              style='Card.TLabelframe', padding=15)
+                              style='Card.TLabelframe', padding=10)
         frame.pack(fill=tk.BOTH, expand=True)
         
         log_container = ttk.Frame(frame, style='Card.TFrame')
@@ -540,7 +559,7 @@ class ConsultaCUFEApp(tk.Tk):
         scrollbar = ttk.Scrollbar(log_container)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.log_text = tk.Text(log_container, height=8, font=self.FONTS['log'],
+        self.log_text = tk.Text(log_container, height=10, font=self.FONTS['log'],
                                bg='#FAFAFA', fg=self.COLORS['text_primary'],
                                state=tk.DISABLED, wrap=tk.WORD,
                                yscrollcommand=scrollbar.set)
@@ -561,16 +580,19 @@ class ConsultaCUFEApp(tk.Tk):
         separator.pack(fill=tk.X)
         
         footer_content = ttk.Frame(footer, style='Main.TFrame')
-        footer_content.pack(fill=tk.X, padx=20, pady=10)
+        footer_content.pack(fill=tk.X, padx=15, pady=8)
         
+        # Izquierda: Empresa
         company = ttk.Label(footer_content,
                            text=f"{APP_CONFIG['company']} • {APP_CONFIG['location']}",
                            style='Small.TLabel')
         company.pack(side=tk.LEFT)
         
-        version = ttk.Label(footer_content, text=f"Versión {APP_CONFIG['version']}",
-                           style='Small.TLabel')
-        version.pack(side=tk.RIGHT)
+        # Derecha: Versión y desarrollador
+        version_dev = ttk.Label(footer_content, 
+                               text=f"v{APP_CONFIG['version']} | {APP_CONFIG['developer']}",
+                               style='Small.TLabel')
+        version_dev.pack(side=tk.RIGHT)
     
     def seleccionar_archivo(self):
         filetypes = [("Archivos Excel", "*.xlsx"), ("Archivos de texto", "*.txt"),
@@ -591,103 +613,91 @@ class ConsultaCUFEApp(tk.Tk):
             self.add_log(f"Carpeta de salida: {carpeta}", "info")
     
     def validar_archivo(self, archivo):
-        self.add_log(f"Procesando archivo: {os.path.basename(archivo)}", "info")
+        self.add_log(f"Procesando: {os.path.basename(archivo)}", "info")
         
         try:
             cufes = []
             extension = os.path.splitext(archivo)[1].lower()
             
             if extension == '.xlsx':
-                import openpyxl
-                wb = openpyxl.load_workbook(archivo, data_only=True)
-                ws = wb.active
-                for row in ws.iter_rows(min_col=1, max_col=1, values_only=True):
-                    if row[0]:
-                        valor = str(row[0]).strip()
-                        if valor and valor.upper() != 'CUFE':
-                            cufes.append(valor)
-                wb.close()
+                try:
+                    import pandas as pd
+                    df = pd.read_excel(archivo, header=None)
+                    for col in df.columns:
+                        for valor in df[col].dropna():
+                            texto = str(valor).strip()
+                            if len(texto) >= 90:
+                                cufes.append(texto)
+                except Exception as e:
+                    self.add_log(f"Error leyendo Excel: {e}", "error")
+                    return
             else:
                 with open(archivo, 'r', encoding='utf-8') as f:
-                    for linea in f:
-                        valor = linea.strip()
-                        if valor and valor.upper() != 'CUFE':
-                            cufes.append(valor)
+                    cufes = [line.strip() for line in f if line.strip()]
             
-            self.cufes_validos = []
-            self.cufes_invalidos = []
-            cufes_unicos = set()
+            self.lista_cufes = cufes
+            self.validar_cufes(cufes)
             
-            for cufe in cufes:
-                cufe_limpio = cufe.strip()
-                if cufe_limpio in cufes_unicos:
-                    continue
-                cufes_unicos.add(cufe_limpio)
-                
-                if len(cufe_limpio) == 96 and all(c in '0123456789abcdefABCDEF' for c in cufe_limpio):
-                    self.cufes_validos.append(cufe_limpio)
-                else:
-                    self.cufes_invalidos.append(cufe_limpio)
-            
-            self.duplicados = len(cufes) - len(cufes_unicos)
-            
-            self.lbl_validos.config(text=f"Válidos: {len(self.cufes_validos)}")
-            self.lbl_invalidos.config(text=f"Inválidos: {len(self.cufes_invalidos)}")
-            self.lbl_duplicados.config(text=f"Duplicados: {self.duplicados}")
-            self.lbl_total.config(text=f"Total a procesar: {len(self.cufes_validos)}")
-            
-            if len(self.cufes_validos) > 0:
-                self.btn_iniciar.config(state=tk.NORMAL)
-                self.add_log(f"Validación OK: {len(self.cufes_validos)} CUFEs listos", "success")
-                
-                self.total_procesar = len(self.cufes_validos)
-                self.total_lotes = (self.total_procesar + APP_CONFIG['max_navegadores'] - 1) // APP_CONFIG['max_navegadores']
-                self.add_log(f"Se procesarán en {self.total_lotes} lote(s)", "info")
-            else:
-                self.btn_iniciar.config(state=tk.DISABLED)
-                self.add_log("No se encontraron CUFEs válidos", "error")
-            
-            if len(self.cufes_invalidos) > 0:
-                self.add_log(f"Atención: {len(self.cufes_invalidos)} CUFE(s) inválidos", "warning")
-                
         except Exception as e:
-            self.add_log(f"Error al procesar archivo: {str(e)}", "error")
-            messagebox.showerror("Error", f"No se pudo procesar el archivo:\n{str(e)}")
+            self.add_log(f"Error: {e}", "error")
+    
+    def validar_cufes(self, cufes):
+        import re
+        self.cufes_validos = []
+        self.cufes_invalidos = []
+        cufe_set = set()
+        self.duplicados = 0
+        
+        patron = re.compile(r'^[a-fA-F0-9]{96}$')
+        
+        for cufe in cufes:
+            cufe_limpio = cufe.strip()
+            
+            if not patron.match(cufe_limpio):
+                self.cufes_invalidos.append(cufe_limpio)
+            elif cufe_limpio in cufe_set:
+                self.duplicados += 1
+            else:
+                cufe_set.add(cufe_limpio)
+                self.cufes_validos.append(cufe_limpio)
+        
+        self.lbl_validos.config(text=f"✓ Válidos: {len(self.cufes_validos)}")
+        self.lbl_invalidos.config(text=f"✗ Inválidos: {len(self.cufes_invalidos)}")
+        self.lbl_duplicados.config(text=f"⚠ Duplicados: {self.duplicados}")
+        self.lbl_total.config(text=f"Total a procesar: {len(self.cufes_validos)}")
+        
+        if self.cufes_validos:
+            self.btn_iniciar.config(state=tk.NORMAL)
+            self.add_log(f"✓ {len(self.cufes_validos)} CUFEs listos para procesar", "success")
+        else:
+            self.btn_iniciar.config(state=tk.DISABLED)
+            self.add_log("No hay CUFEs válidos", "warning")
+        
+        if self.cufes_invalidos:
+            self.add_log(f"⚠ {len(self.cufes_invalidos)} CUFEs con formato inválido", "warning")
     
     def iniciar_proceso(self):
         if not self.cufes_validos:
             messagebox.showwarning("Aviso", "No hay CUFEs válidos para procesar")
             return
         
-        respuesta = messagebox.askyesno("Confirmar",
-            f"Se consultarán {len(self.cufes_validos)} facturas en DIAN.\n\n"
-            f"Los archivos se guardarán en:\n{self.carpeta_salida.get()}\n\n"
-            "¿Desea continuar?")
-        
-        if not respuesta:
-            return
-        
         self.processing = True
         self.stop_requested = False
-        
         self.btn_iniciar.config(state=tk.DISABLED)
         self.btn_detener.config(state=tk.NORMAL)
         self.btn_excel.config(state=tk.DISABLED)
         self.btn_seleccionar.config(state=tk.DISABLED)
         self.btn_carpeta.config(state=tk.DISABLED)
         
-        # Resetear progreso
-        self.progreso_actual = 0
+        self.total_procesar = len(self.cufes_validos)
         self.progreso_base = 0
-        self.barra_progreso_valor = 0
         self.barra_progreso_visual = 0.0
         self.barra_progreso_objetivo = 0.0
         self._dibujar_barra(0)
-        self.lbl_porcentaje.config(text="0%", fg=self.COLORS['primary'])
+        self.lbl_porcentaje.config(text="0%", fg=self.COLORS['text_secondary'])
         self.lbl_progreso.config(text=f"0 de {self.total_procesar} facturas procesadas")
         self.lbl_estado.config(text="Iniciando consulta...")
         
-        # Iniciar animación de la barra
         self._iniciar_animacion_barra()
         
         self.add_log("Iniciando consulta de facturas...", "info")
@@ -705,18 +715,33 @@ class ConsultaCUFEApp(tk.Tk):
             settings = cargar_settings()
             
             carpeta_salida = self.carpeta_salida.get()
-            carpeta_pdfs = os.path.join(carpeta_salida, "facturas_pdfs_descargados")
+            
+            # Crear carpeta oculta para temporales
+            carpeta_temp = os.path.join(carpeta_salida, ".cufe_temp")
+            os.makedirs(carpeta_temp, exist_ok=True)
+            
+            # En Windows, ocultar la carpeta
+            try:
+                import platform
+                if platform.system() == "Windows":
+                    import subprocess
+                    subprocess.run(['attrib', '+h', carpeta_temp], check=False, capture_output=True)
+            except:
+                pass
+            
+            carpeta_pdfs = os.path.join(carpeta_salida, "Facturas_PDF")
             os.makedirs(carpeta_pdfs, exist_ok=True)
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            archivo_excel = os.path.join(carpeta_salida, f"Facturas_Completas_{timestamp}.xlsx")
+            archivo_excel = os.path.join(carpeta_salida, f"Reporte_Facturas_{timestamp}.xlsx")
             
             config = {
                 'dian_url': settings.dian_url,
                 'carpeta_pdfs': carpeta_pdfs,
                 'archivo_excel': archivo_excel,
                 'num_navegadores': min(len(self.cufes_validos), APP_CONFIG['max_navegadores']),
-                'max_reintentos': settings.max_reintentos
+                'max_reintentos': settings.max_reintentos,
+                'carpeta_temp': carpeta_temp,
             }
             
             def callback_progreso(porcentaje, actual, total):
@@ -724,9 +749,7 @@ class ConsultaCUFEApp(tk.Tk):
             
             def callback_mensaje(mensaje, tipo):
                 self.add_log(mensaje, tipo)
-                # Actualizar el estado visible
                 self.after(0, lambda m=mensaje: self.lbl_estado.config(text=m))
-                # Actualizar progreso parcial basado en el mensaje
                 self.after(0, lambda m=mensaje: self._actualizar_progreso_parcial(m))
             
             resultado = ejecutar_sistema(self.cufes_validos, config,
@@ -747,7 +770,7 @@ class ConsultaCUFEApp(tk.Tk):
                 duracion = resultado['duracion']
                 
                 self.add_log("─" * 40, "info")
-                self.add_log(f"RESUMEN FINAL:", "info")
+                self.add_log("RESUMEN FINAL:", "info")
                 self.add_log(f"  Exitosos: {exitosos}", "success")
                 self.add_log(f"  No encontrados: {no_encontrados}", "warning")
                 self.add_log(f"  Errores: {errores}", "error")
@@ -765,18 +788,14 @@ class ConsultaCUFEApp(tk.Tk):
             self.after(0, self.proceso_finalizado)
     
     def actualizar_progreso(self, porcentaje, actual, total):
-        """Actualiza el progreso cuando una factura se completa"""
         self.progreso_base = actual
         self.lbl_progreso.config(text=f"{actual} de {total} facturas procesadas")
         
-        # Calcular objetivo real
         objetivo_real = (actual / max(total, 1)) * 100
         
-        # El objetivo visual puede estar un poco adelante por las fases
         if objetivo_real > self.barra_progreso_objetivo:
             self.barra_progreso_objetivo = objetivo_real
         
-        # Si llegamos al 100%, forzar
         if porcentaje >= 100:
             self.barra_progreso_objetivo = 100
             self.barra_progreso_visual = 100
@@ -803,7 +822,7 @@ class ConsultaCUFEApp(tk.Tk):
             self.add_log("Deteniendo proceso...", "warning")
     
     def generar_excel(self):
-        if hasattr(self, 'archivo_excel_generado') and os.path.exists(self.archivo_excel_generado):
+        if hasattr(self, 'archivo_excel_generado') and self.archivo_excel_generado and os.path.exists(self.archivo_excel_generado):
             try:
                 import webbrowser
                 import platform
@@ -862,7 +881,7 @@ def main():
     print("=" * 60)
     print("  SISTEMA DE CONSULTA CUFE - DIAN")
     print("  A.S. Contadores & Asesores SAS")
-    print("  Versión 4.0.0")
+    print(f"  Versión {APP_CONFIG['version']} | Dev: {APP_CONFIG['developer']}")
     print("=" * 60)
     
     try:
