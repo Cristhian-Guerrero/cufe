@@ -31,13 +31,13 @@ except ImportError as e:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APP = {
-    'title': 'CUFE DIAN',
-    'version': '4.5.0',
+    'title': 'CUFE DIAN - A.S. Contadores & Asesores',
+    'version': '4.5.1',
     'company': 'A.S. Contadores & Asesores SAS',
-    'location': '',
+    'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
     'width': 920,
-    'height': 680,
+    'height': 750,
     'max_nav': 10,
 }
 
@@ -503,6 +503,9 @@ class App(tk.Tk):
                 self.log(f"✓ Completado: {ok} exitosos, {err} errores", "success")
                 self.log(f"⏱ Tiempo: {dur:.1f}s", "info")
                 
+                # Limpiar temporales
+                self._limpiar_temporales(temp)
+                
                 self.after(0, lambda: self._update_prog(100, self.total, self.total))
             
             self.after(0, self._finalizar)
@@ -532,6 +535,16 @@ class App(tk.Tk):
         self.btn_stop.config(state=tk.DISABLED)
         self.btn_excel.config(state=tk.NORMAL, bg=C['primary'], fg='white')
         self.btn_archivo.config(state=tk.NORMAL)
+    
+    def _limpiar_temporales(self, carpeta_temp):
+        """Elimina la carpeta temporal después de finalizar exitosamente"""
+        try:
+            import shutil
+            if os.path.exists(carpeta_temp):
+                shutil.rmtree(carpeta_temp, ignore_errors=True)
+                self.log("🧹 Temporales eliminados", "info")
+        except Exception as e:
+            self.log(f"Aviso: No se pudieron eliminar temporales: {e}", "warning")
     
     def detener(self):
         if messagebox.askyesno("Confirmar", "¿Detener el proceso?"):
