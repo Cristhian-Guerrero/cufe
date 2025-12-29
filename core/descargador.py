@@ -1,15 +1,14 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-DESCARGADOR CORREGIDO - CUFE DIAN AUTOMATION
-Basado en main_backup_v3.3.py - Con renombrado y mapping
-v3.5.2 - Corregido: Solo detecta PDFs que coincidan con el CUFE
+DESCARGADOR - CUFE DIAN AUTOMATION
+v3.7.0 - Optimizado: Carpetas temp del sistema, cierre inmediato en error
 ═══════════════════════════════════════════════════════════════════════════
 
-CAMBIOS CLAVE vs versión anterior:
-1. detectar_pdf() SOLO busca PDFs que contengan cufe[:20] en el nombre
-2. NO hay fallback a "cualquier PDF nuevo" - esto causaba el desorden
-3. Se guarda el mapping cufe -> nombre_archivo
-4. Se usa lock para evitar race conditions
+CAMBIOS v3.7.0:
+1. Carpetas Chrome en carpeta temporal configurable (no en cwd)
+2. Función para limpiar TODAS las carpetas Chrome al finalizar
+3. Navegadores se pueden cerrar individualmente
+4. Mejor manejo de recursos en Windows
 """
 
 import time
@@ -17,14 +16,86 @@ import os
 import hashlib
 import threading
 import json
+import shutil
+import tempfile
 from DrissionPage import ChromiumPage, ChromiumOptions
 from utils import log
 
 # === VARIABLES GLOBALES DEL MÓDULO ===
 lock_mapping = threading.Lock()
+lock_navegadores = threading.Lock()
 mapping_cufes = {}
-navegadores_activos = []
+navegadores_activos = {}  # Cambiado a dict: {nav_id: page}
 ARCHIVO_MAPPING = "mapping_cufes_pdfs.json"
+
+# Carpeta base para datos de Chrome (configurable)
+_carpeta_chrome_base = None
+
+
+def configurar_carpeta_chrome(carpeta_temp: str):
+    """Configura la carpeta base para los datos de Chrome"""
+    global _carpeta_chrome_base
+    _carpeta_chrome_base = carpeta_temp
+    os.makedirs(_carpeta_chrome_base, exist_ok=True)
+
+
+def obtener_carpeta_chrome(nav_id: int) -> str:
+    """Obtiene la carpeta de datos para un navegador específico"""
+    global _carpeta_chrome_base
+    
+    if _carpeta_chrome_base is None:
+        # Usar carpeta temporal del sistema por defecto
+        _carpeta_chrome_base = os.path.join(tempfile.gettempdir(), "cufe_dian_chrome")
+        os.makedirs(_carpeta_chrome_base, exist_ok=True)
+    
+    return os.path.join(_carpeta_chrome_base, f"chrome_{nav_id}")
+
+
+def limpiar_carpetas_chrome():
+    """Elimina TODAS las carpetas de datos de Chrome creadas"""
+    global _carpeta_chrome_base
+    
+    carpetas_a_limpiar = []
+    
+    # 1. Carpeta base configurada
+    if _carpeta_chrome_base and os.path.exists(_carpeta_chrome_base):
+        carpetas_a_limpiar.append(_carpeta_chrome_base)
+    
+    # 2. Carpetas en directorio actual (legacy)
+    cwd = os.getcwd()
+    try:
+        for item in os.listdir(cwd):
+            if item.startswith('.chrome_dian_') or item.startswith('chrome_'):
+                ruta = os.path.join(cwd, item)
+                if os.path.isdir(ruta):
+                    carpetas_a_limpiar.append(ruta)
+    except:
+        pass
+    
+    # 3. Carpetas en temp del sistema
+    temp_dir = tempfile.gettempdir()
+    try:
+        for item in os.listdir(temp_dir):
+            if item.startswith('cufe_dian_chrome'):
+                ruta = os.path.join(temp_dir, item)
+                if os.path.isdir(ruta):
+                    carpetas_a_limpiar.append(ruta)
+    except:
+        pass
+    
+    # Eliminar todas
+    eliminadas = 0
+    for carpeta in carpetas_a_limpiar:
+        try:
+            shutil.rmtree(carpeta, ignore_errors=True)
+            eliminadas += 1
+        except:
+            pass
+    
+    if eliminadas > 0:
+        log(0, f"🧹 {eliminadas} carpetas Chrome eliminadas", "INFO")
+    
+    return eliminadas
 
 
 def guardar_mapping():
@@ -38,10 +109,7 @@ def guardar_mapping():
 
 
 def generar_nombre_unico(cufe: str, nav_id: int) -> str:
-    """
-    Genera nombre único para el PDF
-    Formato: FACTURA_{cufe[:20]}_{hash}.pdf
-    """
+    """Genera nombre único para el PDF"""
     timestamp_micro = int(time.time() * 1000000)
     hash_parte = hashlib.md5(f"{cufe}_{nav_id}_{timestamp_micro}".encode()).hexdigest()[:12]
     return f"FACTURA_{cufe[:20]}_{hash_parte}.pdf"
@@ -89,7 +157,7 @@ class CloudflareBypass:
         return False
 
 
-def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str):
+def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headless: bool = False):
     """
     Inicializa navegador Chrome con configuración de descarga
     
@@ -97,6 +165,7 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str):
         nav_id: ID del navegador
         carpeta_pdfs: Carpeta destino de PDFs
         dian_url: URL del portal DIAN
+        headless: Si True, ejecuta sin ventana visible
     
     Returns:
         tuple: (ChromiumPage, CloudflareBypass) o (None, None) si falla
@@ -104,22 +173,26 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str):
     log(nav_id, "🌐 Iniciando...", "INFO")
     
     port = 9700 + (nav_id * 5)
-    user_data = os.path.join(os.getcwd(), f".chrome_dian_{nav_id}")
+    user_data = obtener_carpeta_chrome(nav_id)
     
     co = ChromiumOptions()
     co.set_local_port(port)
-    co.headless(False)
+    co.headless(headless)
     co.set_argument('--no-sandbox')
     co.set_argument('--disable-dev-shm-usage')
     co.set_argument('--disable-gpu')
+    co.set_argument('--disable-software-rasterizer')
+    co.set_argument('--disable-extensions')
+    co.set_argument('--disable-sync')
+    co.set_argument('--disable-translate')
+    co.set_argument('--disable-background-networking')
+    co.set_argument('--disable-default-apps')
     co.set_argument('--window-size=800,600')
     co.set_argument(f'--user-data-dir={user_data}')
     co.set_argument('--disable-blink-features=AutomationControlled')
     
     # Posición fuera de pantalla
-    x = -2000
-    y = -2000
-    co.set_argument(f'--window-position={x},{y}')
+    co.set_argument('--window-position=-2000,-2000')
     
     os.makedirs(carpeta_pdfs, exist_ok=True)
     ruta_absoluta = os.path.abspath(carpeta_pdfs)
@@ -134,7 +207,10 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str):
         page = ChromiumPage(addr_or_opts=co)
         page.set.timeouts(20)
         page.set.download_path(ruta_absoluta)
-        navegadores_activos.append(page)
+        
+        # Registrar navegador activo
+        with lock_navegadores:
+            navegadores_activos[nav_id] = page
         
         # Crear bypass
         bypass = CloudflareBypass(page, nav_id)
@@ -153,31 +229,34 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str):
         return None, None
 
 
+def cerrar_navegador(nav_id: int):
+    """Cierra un navegador específico y limpia su carpeta"""
+    with lock_navegadores:
+        if nav_id in navegadores_activos:
+            try:
+                navegadores_activos[nav_id].quit()
+                log(nav_id, "Navegador cerrado", "INFO")
+            except:
+                pass
+            del navegadores_activos[nav_id]
+    
+    # Limpiar carpeta de este navegador
+    carpeta = obtener_carpeta_chrome(nav_id)
+    try:
+        if os.path.exists(carpeta):
+            shutil.rmtree(carpeta, ignore_errors=True)
+    except:
+        pass
+
+
 def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str, timeout: int = 20) -> str:
     """
     Detecta archivo PDF nuevo que coincida con el CUFE y lo renombra
-    
-    IMPORTANTE - IGUAL QUE BACKUP v3.3:
-    - SOLO busca PDFs que contengan cufe[:20] en el nombre
-    - NO hay fallback a "cualquier PDF nuevo"
-    - Esto evita que un navegador tome el PDF de otro
-    
-    Args:
-        cufe: CUFE buscado
-        nav_id: ID navegador
-        archivos_antes: Set de archivos ANTES de iniciar descarga
-        carpeta_pdfs: Carpeta de PDFs
-        timeout: Timeout en segundos
-    
-    Returns:
-        Ruta ABSOLUTA del PDF renombrado o None si timeout
     """
     log(nav_id, f"⏳ Esperando PDF ({timeout}s)...", "INFO")
     
     tiempo_inicio = time.time()
-    cufe_parcial = cufe[:20]  # Los primeros 20 caracteres del CUFE
-    
-    # Siempre usar ruta absoluta
+    cufe_parcial = cufe[:20]
     carpeta_abs = os.path.abspath(carpeta_pdfs)
     
     while (time.time() - tiempo_inicio) < timeout:
@@ -187,8 +266,6 @@ def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str,
             archivos_ahora = set(os.listdir(carpeta_abs))
             archivos_nuevos = archivos_ahora - archivos_antes
             
-            # CRÍTICO: Solo buscar PDFs que contengan el CUFE parcial
-            # NO hay fallback - igual que backup v3.3
             pdfs_cufe = [
                 f for f in archivos_nuevos 
                 if f.endswith('.pdf') and cufe_parcial in f and not f.endswith('.crdownload')
@@ -198,14 +275,12 @@ def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str,
                 pdf_nombre = pdfs_cufe[0]
                 ruta_pdf = os.path.join(carpeta_abs, pdf_nombre)
                 
-                # Verificar tamaño
                 try:
                     tamanio = os.path.getsize(ruta_pdf)
                 except:
                     continue
                 
-                if tamanio > 1000:  # Más de 1KB
-                    # RENOMBRAR INMEDIATAMENTE
+                if tamanio > 1000:
                     nombre_nuevo = generar_nombre_unico(cufe, nav_id)
                     ruta_nueva = os.path.join(carpeta_abs, nombre_nuevo)
                     
@@ -213,16 +288,12 @@ def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str,
                         os.rename(ruta_pdf, ruta_nueva)
                         log(nav_id, f"✓ {nombre_nuevo}", "OK")
                         
-                        # Guardar en mapping
                         with lock_mapping:
                             mapping_cufes[cufe] = nombre_nuevo
                         
-                        # Guardar mapping a disco
                         guardar_mapping()
-                        
                         return ruta_nueva
                     except:
-                        # Si falla renombrar, devolver original
                         return ruta_pdf
                         
         except:
@@ -235,21 +306,7 @@ def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str,
 def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int,
                    carpeta_pdfs: str, intento: int = 1, max_reintentos: int = 2) -> dict:
     """
-    Descarga un CUFE específico - IGUAL QUE BACKUP v3.3
-    
-    Args:
-        page: ChromiumPage
-        bypass: CloudflareBypass instance
-        cufe: CUFE a descargar
-        numero: Número de orden
-        total: Total de CUFEs
-        nav_id: ID navegador
-        carpeta_pdfs: Carpeta destino
-        intento: Número de intento actual
-        max_reintentos: Máximo de reintentos permitidos
-    
-    Returns:
-        dict con resultado de la descarga
+    Descarga un CUFE específico
     """
     if intento > 1:
         log(nav_id, "="*50, "RETRY")
@@ -271,19 +328,16 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         'intento': intento
     }
     
-    # IMPORTANTE: Capturar archivos ANTES de iniciar (con ruta absoluta)
     carpeta_abs = os.path.abspath(carpeta_pdfs)
     archivos_antes = set(os.listdir(carpeta_abs))
     
     try:
-        # Navegar si es necesario
         dian_url = "https://catalogo-vpfe.dian.gov.co/User/SearchDocument"
         if "SearchDocument" not in page.url:
             page.get(dian_url)
             time.sleep(2)
             bypass.intentar()
         
-        # Buscar campo CUFE
         campo_cufe = page.ele('#DocumentKey', timeout=8)
         if not campo_cufe:
             resultado['mensaje'] = "Campo CUFE no encontrado"
@@ -299,7 +353,6 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         bypass.intentar(timeout=10)
         time.sleep(2)
         
-        # Buscar botón de búsqueda
         boton_buscar = page.ele('css:button.search-document', timeout=8)
         if not boton_buscar:
             resultado['mensaje'] = "Botón búsqueda no encontrado"
@@ -308,27 +361,28 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         log(nav_id, "🔍 Buscando...", "INFO")
         boton_buscar.click()
-        time.sleep(4)
-        
-        # Verificar si documento existe
-        if page.ele('text:Documento no encontrado', timeout=2):
-            log(nav_id, "⚠️ NO ENCONTRADO", "WARN")
-            resultado['estado'] = 'no_encontrado'
-            resultado['mensaje'] = "No existe en DIAN"
-            return resultado
+        time.sleep(3)
         
         bypass.intentar(timeout=10)
         time.sleep(2)
         
         log(nav_id, "🔎 Buscando PDF...", "INFO")
         
-        # Buscar botón de descarga PDF
+        # MEJORADO: Buscar botón PDF primero, con más tiempo
+        # Solo declarar "no encontrado" si después de buscar no hay botón
         boton_pdf = None
         tiempo_busqueda = time.time()
-        timeout_pdf = 45
+        timeout_pdf = 35  # Tiempo suficiente para páginas lentas
+        documento_no_encontrado = False
         
         while not boton_pdf and (time.time() - tiempo_busqueda) < timeout_pdf:
             try:
+                # Verificar si apareció mensaje de "no encontrado"
+                if page.ele('text:Documento no encontrado', timeout=1):
+                    documento_no_encontrado = True
+                    break
+                
+                # Buscar botón de descarga
                 botones = page.eles('tag:a', timeout=2)
                 for boton in botones:
                     texto = boton.text.lower()
@@ -342,6 +396,13 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
                 
             except:
                 time.sleep(2)
+        
+        # Si se detectó "no encontrado" durante la búsqueda
+        if documento_no_encontrado:
+            log(nav_id, "⚠️ NO ENCONTRADO", "WARN")
+            resultado['estado'] = 'no_encontrado'
+            resultado['mensaje'] = "No existe en DIAN"
+            return resultado
         
         if not boton_pdf:
             log(nav_id, "❌ Botón PDF no apareció", "ERROR")
@@ -357,7 +418,6 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         log(nav_id, "✓ Click OK", "OK")
         time.sleep(1)
         
-        # DETECTAR Y RENOMBRAR PDF (solo el que coincide con CUFE)
         ruta_pdf = detectar_pdf(cufe, nav_id, archivos_antes, carpeta_pdfs, timeout=20)
         
         if ruta_pdf:
@@ -380,10 +440,20 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
 
 
 def limpiar_navegadores():
-    """Cierra todos los navegadores activos"""
-    for page in navegadores_activos:
-        try:
-            page.quit()
-        except:
-            pass
-    navegadores_activos.clear()
+    """Cierra todos los navegadores activos y limpia carpetas"""
+    with lock_navegadores:
+        for nav_id, page in list(navegadores_activos.items()):
+            try:
+                page.quit()
+            except:
+                pass
+        navegadores_activos.clear()
+    
+    # Limpiar todas las carpetas Chrome
+    limpiar_carpetas_chrome()
+
+
+def obtener_navegadores_activos():
+    """Retorna la cantidad de navegadores activos"""
+    with lock_navegadores:
+        return len(navegadores_activos)

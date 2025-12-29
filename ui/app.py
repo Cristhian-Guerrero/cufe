@@ -32,7 +32,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '4.5.1',
+    'version': '4.6.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
@@ -537,14 +537,59 @@ class App(tk.Tk):
         self.btn_archivo.config(state=tk.NORMAL)
     
     def _limpiar_temporales(self, carpeta_temp):
-        """Elimina la carpeta temporal después de finalizar exitosamente"""
+        """Elimina la carpeta temporal y carpetas Chrome después de finalizar"""
+        import shutil
+        import tempfile
+        eliminados = 0
+        
+        # 1. Eliminar carpeta temporal del proceso
         try:
-            import shutil
             if os.path.exists(carpeta_temp):
                 shutil.rmtree(carpeta_temp, ignore_errors=True)
-                self.log("🧹 Temporales eliminados", "info")
-        except Exception as e:
-            self.log(f"Aviso: No se pudieron eliminar temporales: {e}", "warning")
+                eliminados += 1
+        except:
+            pass
+        
+        # 2. Eliminar carpetas Chrome en directorio actual
+        try:
+            cwd = os.getcwd()
+            for item in os.listdir(cwd):
+                if item.startswith('.chrome_dian_') or item.startswith('chrome_'):
+                    ruta = os.path.join(cwd, item)
+                    if os.path.isdir(ruta):
+                        shutil.rmtree(ruta, ignore_errors=True)
+                        eliminados += 1
+        except:
+            pass
+        
+        # 3. Eliminar carpetas Chrome en temp del sistema
+        try:
+            temp_dir = tempfile.gettempdir()
+            for item in os.listdir(temp_dir):
+                if item.startswith('cufe_dian_chrome'):
+                    ruta = os.path.join(temp_dir, item)
+                    if os.path.isdir(ruta):
+                        shutil.rmtree(ruta, ignore_errors=True)
+                        eliminados += 1
+        except:
+            pass
+        
+        # 4. Eliminar carpeta donde está el ejecutable (Windows)
+        try:
+            import sys
+            if getattr(sys, 'frozen', False):
+                exe_dir = os.path.dirname(sys.executable)
+                for item in os.listdir(exe_dir):
+                    if item.startswith('.chrome_dian_') or item.startswith('chrome_'):
+                        ruta = os.path.join(exe_dir, item)
+                        if os.path.isdir(ruta):
+                            shutil.rmtree(ruta, ignore_errors=True)
+                            eliminados += 1
+        except:
+            pass
+        
+        if eliminados > 0:
+            self.log(f"🧹 {eliminados} carpetas temporales eliminadas", "info")
     
     def detener(self):
         if messagebox.askyesno("Confirmar", "¿Detener el proceso?"):
