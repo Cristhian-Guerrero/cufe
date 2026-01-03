@@ -1,7 +1,7 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-GENERADOR DE EXCEL - CUFE DIAN AUTOMATION (ACCOUNTING CLEAN)
-v6.0 - Eliminadas columnas basura de nombres divididos
+GENERADOR DE EXCEL - CUFE DIAN AUTOMATION (FULL DATA)
+v6.2 - Reporte completo con Eventos, País y Datos Fiscales
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -15,11 +15,13 @@ from utils import log
 
 class GeneradorExcel:
     
-    # ESTRUCTURA DEFINITIVA Y SIMPLE
+    # ESTRUCTURA DEFINITIVA Y COMPLETA
+    # Tupla: (Key_Diccionario, Titulo_Excel, Ancho_Columna, ID_Grupo)
     COLUMNAS_DEF = [
         # GRUPO 0: CONTROL
         ('Numero', 'N°', 6, 0), 
         ('Estado', 'Estado', 12, 0),
+        ('Eventos', 'Eventos RADIAN', 20, 0),  # <--- NUEVO
         ('Numero_Factura', 'Factura N°', 15, 0),
         
         # GRUPO 1: DATOS DEL DOCUMENTO
@@ -30,21 +32,32 @@ class GeneradorExcel:
         ('Forma_Pago', 'Forma Pago', 15, 1), 
         ('Medio_Pago', 'Medio Pago', 20, 1), 
         
-        # GRUPO 2: EMISOR
+        # GRUPO 2: EMISOR (VENDEDOR)
         ('Emisor_RazonSocial', 'Razón Social Vendedor', 35, 2), 
+        ('Emisor_NombreComercial', 'Nombre Comercial', 25, 2),
         ('Emisor_NIT', 'NIT Vendedor', 15, 2),
+        ('Emisor_Pais', 'País', 12, 2),                  # <--- NUEVO
         ('Emisor_Departamento', 'Depto.', 15, 2), 
         ('Emisor_Municipio', 'Ciudad', 15, 2), 
+        ('Emisor_Direccion', 'Dirección', 30, 2),
+        ('Emisor_Telefono', 'Teléfono', 15, 2),          # <--- NUEVO
+        ('Emisor_Correo', 'Email', 25, 2),               # <--- NUEVO
+        ('Emisor_ActividadEconomica', 'Actividad', 20, 2), # <--- NUEVO
+        ('Emisor_RegimenFiscal', 'Régimen', 15, 2),
         
-        # GRUPO 3: ADQUIRIENTE (CLIENTE) - SIMPLIFICADO
-        ('Adq_Tipo', 'Tipo Pers.', 12, 3), 
+        # GRUPO 3: ADQUIRIENTE (CLIENTE)
+        ('Adq_Tipo', 'Tipo Pers.', 10, 3), 
         ('Adq_NumeroDocumento', 'NIT / CC Cliente', 15, 3), 
-        ('Adq_RazonSocial', 'RAZÓN SOCIAL / NOMBRE (LEGAL)', 40, 3), # EL CAMPO IMPORTANTE
-        ('Adq_NombreComercial', 'Nombre Comercial / Establecimiento', 35, 3), # EL CAMPO SECUNDARIO
+        ('Adq_RazonSocial', 'RAZÓN SOCIAL (LEGAL)', 35, 3), 
+        ('Adq_NombreComercial', 'Establecimiento', 25, 3),
+        ('Adq_Pais', 'País', 12, 3),                     # <--- NUEVO
         ('Adq_Departamento', 'Depto.', 15, 3), 
         ('Adq_Municipio', 'Ciudad', 15, 3), 
         ('Adq_Direccion', 'Dirección', 30, 3), 
+        ('Adq_Telefono', 'Teléfono', 15, 3),             # <--- NUEVO
         ('Adq_Correo', 'Email', 25, 3),
+        ('Adq_Responsabilidad', 'Resp. Tributaria', 20, 3), # <--- NUEVO
+        ('Adq_RegimenFiscal', 'Régimen', 15, 3),         # <--- NUEVO
         
         # GRUPO 4: FINANCIERO
         ('Subtotal', 'Subtotal', 16, 4), 
@@ -79,16 +92,25 @@ class GeneradorExcel:
     def generar(self, datos_completos):
         if not datos_completos: return False
         try:
+            # Ordenar por número de ítem
             datos_ordenados = sorted(datos_completos, key=lambda x: x.get('Numero', 999))
+            
+            # Preparar DataFrame con solo las columnas definidas
             claves_columnas = [col[0] for col in self.COLUMNAS_DEF]
             df = pd.DataFrame(datos_ordenados)
+            
+            # Asegurar que todas las columnas existan aunque no haya datos
             for clave in claves_columnas:
                 if clave not in df.columns: df[clave] = ""
+            
+            # Filtrar y ordenar columnas según definición
             df = df[claves_columnas]
             
+            # Escribir Excel básico
             with pd.ExcelWriter(self.nombre_archivo, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, header=False, sheet_name='Reporte DIAN', startrow=self.fila_inicio_datos-1)
             
+            # Aplicar estilos
             self._aplicar_diseno_premium(df)
             return True
         except Exception as e:
@@ -100,7 +122,7 @@ class GeneradorExcel:
             wb = load_workbook(self.nombre_archivo)
             ws = wb.active
             
-            # ESTILOS
+            # ESTILOS BASE
             font_dashboard_lbl = Font(name='Segoe UI', size=9, color="666666")
             font_dashboard_val = Font(name='Segoe UI', size=14, bold=True, color="1F4E78")
             font_grupo = Font(name='Segoe UI', size=10, bold=True, color="FFFFFF")
@@ -113,10 +135,11 @@ class GeneradorExcel:
             
             align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
-            # DASHBOARD MINIMALISTA
-            ws['B2'] = "REPORTE CONTABLE DE FACTURAS"
+            # --- SECCION DASHBOARD (ENCABEZADO SUPERIOR) ---
+            ws['B2'] = "REPORTE DETALLADO DE FACTURACIÓN ELECTRÓNICA"
             ws['B2'].font = Font(name='Segoe UI', size=16, bold=True, color="404040")
             
+            # KPI: Total Documentos
             ws['B3'] = "TOTAL DOCUMENTOS"
             ws['B3'].font = font_dashboard_lbl
             ws['B3'].alignment = align_center
@@ -125,6 +148,7 @@ class GeneradorExcel:
             ws['B4'].alignment = align_center
             ws['B4'].border = Border(bottom=Side(style='thick', color="1F4E78"))
             
+            # KPI: Fecha Generación
             ws['D3'] = "FECHA GENERACIÓN"
             ws['D3'].font = font_dashboard_lbl
             ws['D3'].alignment = align_center
@@ -133,7 +157,7 @@ class GeneradorExcel:
             ws['D4'].alignment = align_center
             ws['D4'].border = Border(bottom=Side(style='thick', color="1F4E78"))
 
-            # HEADERS AGRUPADOS
+            # --- HEADERS AGRUPADOS (FILA 5) ---
             col_idx = 1
             for grp_id, info in self.GRUPOS_INFO.items():
                 cols_grupo = [c for c in self.COLUMNAS_DEF if c[3] == grp_id]
@@ -141,6 +165,7 @@ class GeneradorExcel:
                 
                 start_col = col_idx
                 end_col = col_idx + len(cols_grupo) - 1
+                
                 ws.merge_cells(start_row=5, start_column=start_col, end_row=5, end_column=end_col)
                 cell = ws.cell(row=5, column=start_col)
                 cell.value = info['titulo']
@@ -148,13 +173,15 @@ class GeneradorExcel:
                 cell.fill = PatternFill(start_color=info['color'], end_color=info['color'], fill_type="solid")
                 cell.alignment = align_center
                 cell.border = Border(right=border_med, left=border_med)
+                
                 col_idx += len(cols_grupo)
 
-            # HEADERS COLUMNAS
+            # --- HEADERS DE COLUMNAS (FILA 6) ---
             col_idx = 1
             for def_col in self.COLUMNAS_DEF:
                 grp_id = def_col[3]
                 color_base = self.GRUPOS_INFO[grp_id]['color']
+                
                 cell = ws.cell(row=6, column=col_idx)
                 cell.value = def_col[1]
                 cell.fill = PatternFill(start_color=color_base, end_color=color_base, fill_type="solid")
@@ -165,20 +192,23 @@ class GeneradorExcel:
                 col_idx += 1
             
             ws.row_dimensions[5].height = 25
-            ws.row_dimensions[6].height = 35
+            ws.row_dimensions[6].height = 40
 
-            # DATOS
+            # --- FORMATO DE DATOS (FILAS 7 en adelante) ---
             cols_moneda = [i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[3] == 4]
-            col_pdf = [i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Ruta_PDF'][0]
-            col_factura = [i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Numero_Factura'][0]
+            # Busqueda segura de indices de columnas especiales
+            col_pdf = next((i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Ruta_PDF'), -1)
+            col_factura = next((i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Numero_Factura'), -1)
+            col_eventos = next((i+1 for i, c in enumerate(self.COLUMNAS_DEF) if c[0] == 'Eventos'), -1)
 
             for row in ws.iter_rows(min_row=self.fila_inicio_datos):
                 fill = PatternFill(start_color="F9F9F9", end_color="F9F9F9", fill_type="solid") if row[0].row % 2 == 0 else None
+                
                 for cell in row:
                     if fill: cell.fill = fill
                     cell.font = font_data
                     cell.border = borde_cuadro
-                    cell.alignment = Alignment(vertical='center')
+                    cell.alignment = Alignment(vertical='center', wrap_text=False)
                     
                     if cell.col_idx in cols_moneda:
                         cell.number_format = '_-$ * #,##0.00_-;-$ * #,##0.00_-;_-;_-@'
@@ -186,6 +216,11 @@ class GeneradorExcel:
                     
                     if cell.col_idx == col_factura:
                         cell.font = Font(name='Segoe UI', size=9, bold=True)
+                        cell.alignment = align_center
+                        
+                    # Resaltar Eventos si existen
+                    if cell.col_idx == col_eventos and cell.value and len(str(cell.value)) > 2:
+                        cell.font = Font(name='Segoe UI', size=9, color="E26B0A", bold=True) # Naranja
                         cell.alignment = align_center
                     
                     if cell.col_idx == col_pdf:
@@ -199,7 +234,7 @@ class GeneradorExcel:
                             cell.value = "-"
                             cell.alignment = align_center
 
-            ws.freeze_panes = 'D7' 
+            ws.freeze_panes = 'E7' 
             ws.auto_filter.ref = f"A6:{get_column_letter(len(self.COLUMNAS_DEF))}{ws.max_row}"
             wb.save(self.nombre_archivo)
             

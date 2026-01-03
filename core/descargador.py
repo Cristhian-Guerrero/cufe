@@ -249,6 +249,39 @@ def cerrar_navegador(nav_id: int):
         pass
 
 
+def extraer_eventos(page, nav_id):
+    """Busca y extrae los códigos de eventos (RADIAN) de la tabla visible"""
+    try:
+        # 1. Buscamos si existe el título de la sección
+        # Usamos un timeout bajo (1s) para no perder tiempo si no tiene eventos
+        if page.ele('text:Eventos de la factura', timeout=1):
+            
+            # 2. Buscamos las tablas presentes
+            tablas = page.eles('tag:table')
+            for tabla in tablas:
+                # Verificamos si es la tabla correcta mirando su encabezado
+                if 'Código' in tabla.text or 'Codigo' in tabla.text:
+                    codigos = []
+                    filas = tabla.eles('tag:tr')
+                    
+                    # 3. Iteramos las filas (saltando la primera que es el encabezado)
+                    for fila in filas[1:]: 
+                        celdas = fila.eles('tag:td')
+                        # El código siempre está en la columna 0 y es numérico
+                        if celdas and celdas[0].text.strip().isdigit():
+                            codigos.append(celdas[0].text.strip())
+                    
+                    if codigos:
+                        resultado = ",".join(codigos)
+                        log(nav_id, f"📋 Eventos encontrados: {resultado}", "INFO")
+                        return resultado
+    except Exception as e:
+        # Si falla algo estético, no detenemos el proceso, solo logueamos warning
+        # log(nav_id, f"Nota eventos: {str(e)[:50]}", "WARN")
+        pass
+        
+    return "" # Si no encuentra nada, devuelve vacío
+
 def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str, timeout: int = 20) -> str:
     """
     Detecta archivo PDF nuevo que coincida con el CUFE y lo renombra
@@ -324,6 +357,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         'estado': 'error',
         'pdf': None,
         'ruta_pdf': None,
+        'eventos': '',
         'mensaje': '',
         'intento': intento
     }
@@ -365,6 +399,9 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         bypass.intentar(timeout=10)
         time.sleep(2)
+        
+        eventos_encontrados = extraer_eventos(page, nav_id)
+        resultado['eventos'] = eventos_encontrados
         
         log(nav_id, "🔎 Buscando PDF...", "INFO")
         
