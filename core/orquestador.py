@@ -278,10 +278,13 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     """
     global _contador_procesados, _total_cufes, _stop_signal, _navegadores_en_uso
     
+    
     _contador_procesados = 0
     _total_cufes = len(cufes)
     _stop_signal.clear()
     _navegadores_en_uso = 0
+    
+    tiempo_inicio = time.time()
     
     configurar_callbacks(callback_progreso, callback_mensaje)
     
@@ -370,7 +373,8 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
         log(0, f"No se pudo abrir automático: {e}", "WARN")
     # ====================================================
     
-    duracion = 0 # Simplificado
+    duracion = time.time() - tiempo_inicio
+    
     resultados = []
     while not cola_resultados.empty():
         resultados.append(cola_resultados.get())
@@ -378,6 +382,14 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     
     limpiar_navegadores()
     limpiar_carpetas_chrome()
+    
+    try:
+        mapping_file = "mapping_cufes_pdfs.json"
+        if os.path.exists(mapping_file):
+            os.remove(mapping_file)
+            log(0, "🧹 Archivo mapping eliminado", "INFO")
+    except:
+        pass
     
     return {
         'resultados': resultados,

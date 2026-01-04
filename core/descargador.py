@@ -398,7 +398,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         time.sleep(2)
         
         bypass.intentar(timeout=10)
-        time.sleep(1.5)
+        time.sleep(1)
         
         eventos_encontrados = extraer_eventos(page, nav_id)
         resultado['eventos'] = eventos_encontrados
@@ -449,7 +449,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         log(nav_id, "📥 Descargando...", "INFO")
         bypass.intentar(timeout=5)
-        time.sleep(1.5)
+        time.sleep(1)
         
         boton_pdf.click()
         log(nav_id, "✓ Click OK", "OK")
