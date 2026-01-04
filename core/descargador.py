@@ -218,7 +218,7 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headles
         # Navegar a DIAN
         log(nav_id, "🌐 Primera navegación...", "INFO")
         page.get(dian_url)
-        time.sleep(3)
+        time.sleep(2)
         bypass.intentar()
         
         log(nav_id, f"✓ OK (:{port})", "OK")
@@ -254,7 +254,7 @@ def extraer_eventos(page, nav_id):
     try:
         # 1. Buscamos si existe el título de la sección
         # Usamos un timeout bajo (1s) para no perder tiempo si no tiene eventos
-        if page.ele('text:Eventos de la factura', timeout=1):
+        if page.ele('text:Eventos de la factura', timeout=0.5):
             
             # 2. Buscamos las tablas presentes
             tablas = page.eles('tag:table')
@@ -385,7 +385,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         time.sleep(1)
         
         bypass.intentar(timeout=10)
-        time.sleep(2)
+        time.sleep(1.5)
         
         boton_buscar = page.ele('css:button.search-document', timeout=8)
         if not boton_buscar:
@@ -395,10 +395,10 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         log(nav_id, "🔍 Buscando...", "INFO")
         boton_buscar.click()
-        time.sleep(3)
+        time.sleep(2)
         
         bypass.intentar(timeout=10)
-        time.sleep(2)
+        time.sleep(1.5)
         
         eventos_encontrados = extraer_eventos(page, nav_id)
         resultado['eventos'] = eventos_encontrados
@@ -449,7 +449,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         log(nav_id, "📥 Descargando...", "INFO")
         bypass.intentar(timeout=5)
-        time.sleep(2)
+        time.sleep(1.5)
         
         boton_pdf.click()
         log(nav_id, "✓ Click OK", "OK")

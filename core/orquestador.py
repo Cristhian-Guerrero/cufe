@@ -356,8 +356,16 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     
     # === ABRIR ARCHIVO AUTOMÁTICAMENTE (FEDORA/LINUX) ===
     try:
+        import platform
+        sistema = platform.system()
         log(0, f"📂 Abriendo reporte: {ARCHIVO_EXCEL}", "INFO")
-        subprocess.run(['xdg-open', ARCHIVO_EXCEL], check=False)
+    
+        if sistema == "Windows":
+            os.startfile(ARCHIVO_EXCEL)
+        elif sistema == "Darwin":  # macOS
+            subprocess.run(['open', ARCHIVO_EXCEL], check=False)
+        else:  # Linux
+            subprocess.run(['xdg-open', ARCHIVO_EXCEL], check=False)
     except Exception as e:
         log(0, f"No se pudo abrir automático: {e}", "WARN")
     # ====================================================
