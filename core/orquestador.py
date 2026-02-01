@@ -1,7 +1,7 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 ORQUESTADOR - CUFE DIAN AUTOMATION (LINUX/FEDORA FINAL)
-v3.7.5 - Conecta eventos, abre archivo automático y gestiona memoria
+v3.7.6 - Conecta eventos, tipo de documento y gestiona memoria
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -104,7 +104,7 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
                        cola_pdfs: queue.Queue, cola_resultados: queue.Queue,
                        dian_url: str, carpeta_pdfs: str, max_reintentos: int):
     """
-    Worker de descarga con soporte para eventos
+    Worker de descarga con soporte para eventos y tipo de documento
     """
     page = None
     bypass = None
@@ -192,12 +192,13 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
                     _notificar_progreso()
                     
                     if resultado['estado'] == 'exitoso' and resultado['ruta_pdf']:
-                        # === AQUÍ PASAMOS LOS EVENTOS AL EXTRACTOR ===
+                        # === AQUÍ PASAMOS EVENTOS Y TIPO AL EXTRACTOR ===
                         cola_pdfs.put({
                             'numero': numero,
                             'cufe': cufe,
                             'ruta_pdf': resultado['ruta_pdf'],
-                            'eventos': resultado.get('eventos', '') # <--- CLAVE NUEVA
+                            'eventos': resultado.get('eventos', ''),
+                            'tipo_documento': resultado.get('tipo_documento', {})  # <--- NUEVO
                         })
                         _notificar_mensaje(f"Factura {numero} descargada", "success")
                     elif resultado['estado'] == 'no_encontrado':
@@ -224,7 +225,7 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
 
 def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list, 
                         lock_excel: threading.Lock):
-    """Extractor que recibe PDFs y Eventos"""
+    """Extractor que recibe PDFs, Eventos y Tipo de Documento"""
     log(99, "🔍 Extractor iniciado", "OK")
     
     while True:
@@ -239,7 +240,8 @@ def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list,
             cufe = item['cufe']
             ruta_pdf = item.get('ruta_pdf')
             no_encontrado = item.get('no_encontrado', False)
-            eventos = item.get('eventos', '') # Recibimos eventos
+            eventos = item.get('eventos', '')
+            tipo_documento = item.get('tipo_documento', {})  # <--- NUEVO
             
             if no_encontrado or ruta_pdf is None:
                 datos = {
@@ -255,8 +257,8 @@ def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list,
             
             log(99, f"📄 Extrayendo #{numero}...", "INFO")
             
-            # Extraer datos del PDF
-            datos = extraer_datos_pdf(ruta_pdf, cufe, numero)
+            # Extraer datos del PDF (ahora con tipo de documento)
+            datos = extraer_datos_pdf(ruta_pdf, cufe, numero, tipo_documento)  # <--- MODIFICADO
             
             # === INYECTAR EVENTOS EN EL DICCIONARIO ===
             datos['Eventos'] = eventos

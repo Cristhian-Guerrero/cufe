@@ -282,6 +282,146 @@ def extraer_eventos(page, nav_id):
         
     return "" # Si no encuentra nada, devuelve vacío
 
+def detectar_tipo_documento(page, nav_id):
+    """
+    Detecta el tipo de documento electrónico desde el HTML de la DIAN
+    
+    Busca el título del documento en la página web y lo clasifica según
+    los tipos estándar de facturación electrónica en Colombia.
+    
+    Args:
+        page: Instancia de ChromiumPage con la página cargada
+        nav_id: ID del navegador (para logging)
+    
+    Returns:
+        dict: {
+            'tipo': str,      # Tipo principal del documento
+            'subtipo': str,   # Subtipo específico (si aplica)
+            'titulo': str     # Título original encontrado en el HTML
+        }
+    
+    Tipos detectados:
+        - FACTURA_ELECTRONICA: Factura electrónica estándar
+        - FACTURA_CONTINGENCIA: Factura de contingencia
+        - DOC_EQUIVALENTE: Documento equivalente (POS, Transporte, etc.)
+        - NOTA_AJUSTE: Nota de ajuste al documento soporte
+        - NOTA_CREDITO: Nota crédito
+        - NOTA_DEBITO: Nota débito
+        - DESCONOCIDO: No se pudo determinar el tipo
+    """
+    try:
+        titulo = ""
+        
+        # Intentar varios selectores donde la DIAN coloca el título del documento
+        selectores_titulo = [
+            'tag:h3',           # Más común en páginas de validación
+            'tag:h2',           # Algunas versiones usan h2
+            'tag:h4',           # Versiones más antiguas
+            'tag:h1',           # Por si acaso
+        ]
+        
+        for selector in selectores_titulo:
+            try:
+                elem = page.ele(selector, timeout=1)
+                if elem:
+                    texto = elem.text.strip()
+                    # Validar que sea un título real (no vacío ni muy corto)
+                    if len(texto) > 5 and len(texto) < 200:
+                        titulo = texto
+                        break
+            except:
+                continue
+        
+        # Si no encontramos título con selectores, buscar en el HTML
+        if not titulo:
+            try:
+                import re
+                # Obtener primeros 3000 caracteres del HTML (suficiente para el header)
+                html_texto = page.html[:3000]
+                
+                # Patrones de títulos comunes en la DIAN
+                patrones = [
+                    r'<h[1-4][^>]*>(Factura [Ee]lectrónica[^<]*)</h[1-4]>',
+                    r'<h[1-4][^>]*>(Documento [Ee]quivalente[^<]*)</h[1-4]>',
+                    r'<h[1-4][^>]*>(Nota de [a-záéíóú]+[^<]*)</h[1-4]>',
+                ]
+                
+                for patron in patrones:
+                    m = re.search(patron, html_texto, re.IGNORECASE)
+                    if m:
+                        titulo = m.group(1).strip()
+                        break
+            except:
+                pass
+        
+        # Si definitivamente no encontramos título, retornar desconocido
+        if not titulo:
+            return {
+                'tipo': 'DESCONOCIDO',
+                'subtipo': '',
+                'titulo': ''
+            }
+        
+        # CLASIFICAR SEGÚN EL TÍTULO ENCONTRADO
+        info = {
+            'tipo': 'DESCONOCIDO',
+            'subtipo': '',
+            'titulo': titulo
+        }
+        
+        titulo_lower = titulo.lower()
+        
+        # === DETECCIÓN DE FACTURA ELECTRÓNICA ===
+        if 'factura' in titulo_lower and 'electr' in titulo_lower:
+            if 'contingencia' in titulo_lower:
+                info['tipo'] = 'FACTURA_CONTINGENCIA'
+            else:
+                info['tipo'] = 'FACTURA_ELECTRONICA'
+        
+        # === DETECCIÓN DE DOCUMENTO EQUIVALENTE ===
+        elif 'documento equivalente' in titulo_lower or 'doc equivalente' in titulo_lower:
+            info['tipo'] = 'DOC_EQUIVALENTE'
+            
+            # Detectar subtipos específicos
+            if 'pos' in titulo_lower:
+                info['subtipo'] = 'POS'
+            elif 'transporte' in titulo_lower:
+                if 'aéreo' in titulo_lower or 'aereo' in titulo_lower:
+                    info['subtipo'] = 'TRANSPORTE_AEREO'
+                elif 'terrestre' in titulo_lower:
+                    info['subtipo'] = 'TRANSPORTE_TERRESTRE'
+                else:
+                    info['subtipo'] = 'TRANSPORTE'
+        
+        # === DETECCIÓN DE NOTAS ===
+        elif 'nota' in titulo_lower:
+            if 'ajuste' in titulo_lower:
+                info['tipo'] = 'NOTA_AJUSTE'
+            elif 'crédito' in titulo_lower or 'credito' in titulo_lower:
+                info['tipo'] = 'NOTA_CREDITO'
+            elif 'débito' in titulo_lower or 'debito' in titulo_lower:
+                info['tipo'] = 'NOTA_DEBITO'
+            else:
+                # Nota genérica
+                info['tipo'] = 'NOTA'
+        
+        # Logging solo si se detectó algo
+        if info['tipo'] != 'DESCONOCIDO':
+            subtipo_str = f" ({info['subtipo']})" if info['subtipo'] else ""
+            log(nav_id, f"📄 Tipo: {info['tipo']}{subtipo_str}", "INFO")
+        
+        return info
+        
+    except Exception as e:
+        # Si ocurre cualquier error, retornar tipo desconocido
+        # No logueamos el error para no saturar logs con problemas no críticos
+        return {
+            'tipo': 'DESCONOCIDO',
+            'subtipo': '',
+            'titulo': ''
+        }
+
+
 def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str, timeout: int = 20) -> str:
     """
     Detecta archivo PDF nuevo que coincida con el CUFE y lo renombra
@@ -402,6 +542,10 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         eventos_encontrados = extraer_eventos(page, nav_id)
         resultado['eventos'] = eventos_encontrados
+        
+        # === DETECTAR TIPO DE DOCUMENTO DESDE HTML ===
+        tipo_doc = detectar_tipo_documento(page, nav_id)
+        resultado['tipo_documento'] = tipo_doc
         
         log(nav_id, "🔎 Buscando PDF...", "INFO")
         

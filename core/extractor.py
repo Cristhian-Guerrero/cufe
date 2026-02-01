@@ -1,8 +1,14 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (FINAL PRECISION)
-v6.7 - Corrección Tipo de Operación y limpieza total de campos pegados
+EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
+v7.1 - Soporte completo + patrones mejorados para totales
 ═══════════════════════════════════════════════════════════════════════════
+
+MEJORAS v7.1:
+1. Patrones adicionales para "Total documento" (Docs POS)
+2. Patrones para "Total neto documento"
+3. Patrones para "Total bruto documento"
+4. Mayor cobertura de formatos de totales financieros
 """
 
 import os
@@ -95,7 +101,19 @@ class ExtractorPDF:
             datos['Adq_RazonSocial'] = limpio
             datos['Adq_NombreComercial'] = ''
 
-    def extraer_datos(self, ruta_pdf, cufe_original, numero):
+    def extraer_datos(self, ruta_pdf, cufe_original, numero, tipo_documento=None):
+        """
+        Extrae datos del PDF con soporte para múltiples formatos
+        
+        Args:
+            ruta_pdf: Ruta al archivo PDF
+            cufe_original: CUFE del documento
+            numero: Número de orden en el proceso
+            tipo_documento: Dict con tipo detectado desde HTML (opcional)
+        
+        Returns:
+            dict: Diccionario con todos los datos extraídos
+        """
         ruta_pdf_absoluta = os.path.abspath(ruta_pdf)
         
         datos = {
@@ -140,6 +158,7 @@ class ExtractorPDF:
                     datos['Estado'] = '⚠️ PDF sin texto'
                     return datos
 
+                # Extraer con patrones múltiples (compatible con todos los formatos)
                 self._extraer_documento(datos, texto_completo)
                 self._extraer_emisor(datos, texto_completo)
                 self._extraer_adquiriente(datos, texto_completo)
@@ -152,127 +171,346 @@ class ExtractorPDF:
         return datos
 
     def _extraer_documento(self, datos, texto):
-        m = re.search(r'CUFE:?\s*([\w\n]+)', texto); 
-        if m: datos['CUFE'] = m.group(1).replace('\n', '').strip()[:100]
-        m = re.search(r'Número de Factura:\s*([A-Z0-9\-]+)', texto); 
-        if m: datos['Numero_Factura'] = m.group(1)
-        m = re.search(r'Fecha de Emisión:\s*(\d{2}/\d{2}/\d{4})', texto); 
-        if m: datos['Fecha_Emision'] = m.group(1)
-        m = re.search(r'Fecha de Vencimiento:\s*(\d{2}/\d{2}/\d{4})', texto); 
-        if m: datos['Fecha_Vencimiento'] = m.group(1)
+        """Extrae datos del documento con PATRONES MÚLTIPLES"""
         
-        # --- CORRECCIÓN TIPO OPERACIÓN ---
-        # Corta si encuentra "Fecha", "Orden" o "Forma" pegado al final
-        m = re.search(r'Tipo de Operación:\s*([^\n]+)', texto); 
-        if m: 
-            val = self.limpiar_texto(m.group(1))
-            palabras_corte = ['Fecha', 'Orden', 'Forma', 'Medio']
-            for p in palabras_corte:
-                if p in val:
-                    val = val.split(p)[0]
-            datos['Tipo_Operacion'] = val.strip()
+        # === CUFE/CUDS ===
+        m = re.search(r'CU[FD][ES]:?\s*([\w\n]+)', texto, re.IGNORECASE)
+        if m: datos['CUFE'] = m.group(1).replace('\n', '').strip()[:100]
+        
+        # === NÚMERO DE DOCUMENTO (Múltiples variantes) ===
+        patrones_numero = [
+            r'Número de Factura:\s*([A-Z0-9\-]+)',
+            r'Número de documento:\s*([A-Z0-9\-]+)',
+            r'Número\s+de\s+Factura\s+Electrónica:\s*([A-Z0-9\-]+)',
+            r'Folio:\s*([A-Z0-9\-]+)',
+            r'Serie:\s*([A-Z]{2,10})',  # Para POS: Serie POMA
+            r'Número de nota:\s*([A-Z0-9\-]+)',
+            r'N[úu]mero:\s*([A-Z0-9\-]+)',
+        ]
+        for patron in patrones_numero:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                datos['Numero_Factura'] = m.group(1)
+                break
+        
+        # === FECHA DE EMISIÓN (Múltiples formatos) ===
+        patrones_fecha_emision = [
+            r'Fecha de Emisión:\s*(\d{2}/\d{2}/\d{4})',
+            r'Fecha de emisión:\s*(\d{2}/\d{2}/\d{4})',
+            r'Fecha y hora de expedición:\s*(\d{4}-\d{2}-\d{2})',
+            r'Fecha de expedición:\s*(\d{2}/\d{2}/\d{4})',
+            r'Fecha de generación:\s*(\d{2}/\d{2}/\d{4})',
+        ]
+        for patron in patrones_fecha_emision:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                fecha = m.group(1)
+                # Convertir formato ISO si es necesario
+                if '-' in fecha:
+                    partes = fecha.split('-')
+                    if len(partes) == 3:
+                        fecha = f"{partes[2]}/{partes[1]}/{partes[0]}"
+                datos['Fecha_Emision'] = fecha
+                break
+        
+        # === FECHA DE VENCIMIENTO ===
+        patrones_vencimiento = [
+            r'Fecha de Vencimiento:\s*(\d{2}/\d{2}/\d{4})',
+            r'Fecha de vencimiento:\s*(\d{2}/\d{2}/\d{4})',
+        ]
+        for patron in patrones_vencimiento:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                datos['Fecha_Vencimiento'] = m.group(1)
+                break
+        
+        # === TIPO DE OPERACIÓN (Con limpieza mejorada) ===
+        patrones_tipo_op = [
+            r'Tipo de Operación:\s*([^\n]+)',
+            r'Tipo de operación:\s*([^\n]+)',
+        ]
+        for patron in patrones_tipo_op:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                val = self.limpiar_texto(m.group(1))
+                # Cortar si encuentra palabras pegadas
+                palabras_corte = ['Fecha', 'Orden', 'Forma', 'Medio']
+                for p in palabras_corte:
+                    if p in val:
+                        val = val.split(p)[0]
+                datos['Tipo_Operacion'] = val.strip()
+                break
 
-        m = re.search(r'Forma de pago:\s*([^\n]+)', texto); 
-        if m: datos['Forma_Pago'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Medio de Pago:\s*([^\n]+)', texto); 
-        if m: datos['Medio_Pago'] = self._limpiar_valor_fiscal(m.group(1))
+        # === FORMA DE PAGO ===
+        patrones_forma_pago = [
+            r'Forma de pago:\s*([^\n]+)',
+            r'Forma de Pago:\s*([^\n]+)',
+        ]
+        for patron in patrones_forma_pago:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                datos['Forma_Pago'] = self._limpiar_valor_fiscal(m.group(1))
+                break
+
+        # === MEDIO DE PAGO ===
+        patrones_medio_pago = [
+            r'Medio de Pago:\s*([^\n]+)',
+            r'Medio de pago:\s*([^\n]+)',
+        ]
+        for patron in patrones_medio_pago:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                datos['Medio_Pago'] = self._limpiar_valor_fiscal(m.group(1))
+                break
 
     def _extraer_emisor(self, datos, texto):
-        bloque = re.search(r'Datos del Emisor(.*?)Datos del Adquiriente', texto, re.DOTALL | re.IGNORECASE)
+        """Extrae datos del emisor/vendedor con PATRONES MÚLTIPLES"""
+        
+        # Intentar delimitar bloque de emisor
+        bloque = re.search(
+            r'Datos del [Ee]misor(.*?)Datos del (?:Adquiriente|[Aa]dquirente|[Rr]eceptor|[Cc]omprador)',
+            texto, re.DOTALL | re.IGNORECASE
+        )
         txt = bloque.group(1) if bloque else texto
         
-        m = re.search(r'Razón Social:\s*([^\n]+)', txt); 
-        if m: datos['Emisor_RazonSocial'] = self.limpiar_nombre_puro(m.group(1))
-        m = re.search(r'Nit del Emisor:\s*([\d\.-]+)', txt); 
-        if m: datos['Emisor_NIT'] = m.group(1)
-        m = re.search(r'Tipo de Contribuyente:\s*([^\n]+)', txt); 
+        # === RAZÓN SOCIAL DEL EMISOR ===
+        patrones_razon_social = [
+            r'Razón Social:\s*([^\n]+)',
+            r'Razón social:\s*([^\n]+)',
+            r'Nombre:\s*([^\n]+)',
+            r'Razón social y/o Nombre:\s*([^\n]+)',
+            r'Razón [Ss]ocial [Vv]endedor:\s*([^\n]+)',
+        ]
+        for patron in patrones_razon_social:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Emisor_RazonSocial'] = self.limpiar_nombre_puro(m.group(1))
+                break
+        
+        # === NIT DEL EMISOR ===
+        patrones_nit = [
+            r'Nit del Emisor:\s*([\d\.-]+)',
+            r'NIT del emisor:\s*([\d\.-]+)',
+            r'NIT:\s*([\d\.-]+)',
+            r'Número de documento:\s*([\d\.-]+)',
+            r'N[úu]mero [Dd]ocumento:\s*([\d\.-]+)',
+        ]
+        for patron in patrones_nit:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Emisor_NIT'] = m.group(1)
+                break
+        
+        # === TIPO DE CONTRIBUYENTE ===
+        m = re.search(r'Tipo de [Cc]ontribuyente:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Emisor_TipoContribuyente'] = self._limpiar_valor_fiscal(m.group(1))
         
-        # Corrección Fiscales Emisor (Tijera inteligente)
-        m = re.search(r'Régimen Fiscal:(.+)', txt); 
-        if m: 
-            val = re.split(r'Responsabilidad|Actividad', m.group(1))[0]
-            datos['Emisor_RegimenFiscal'] = self._limpiar_valor_fiscal(val)
+        # === RÉGIMEN FISCAL ===
+        patrones_regimen = [
+            r'Régimen Fiscal:\s*(.+)',
+            r'Régimen fiscal:\s*(.+)',
+            r'R[ée]gimen:\s*(.+)',
+        ]
+        for patron in patrones_regimen:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                val = re.split(r'Responsabilidad|Actividad', m.group(1))[0]
+                datos['Emisor_RegimenFiscal'] = self._limpiar_valor_fiscal(val)
+                break
 
-        m = re.search(r'Responsabilidad tributaria:\s*(.+)', txt); 
-        if m: 
+        # === RESPONSABILIDAD TRIBUTARIA ===
+        m = re.search(r'Responsabilidad tributaria:\s*(.+)', txt, re.IGNORECASE)
+        if m:
             val = re.split(r'Actividad|País|Pais', m.group(1))[0]
             datos['Emisor_Responsabilidad'] = self._limpiar_valor_fiscal(val)
 
-        m = re.search(r'Actividad Económica:\s*([^\n]*)', txt);
-        if m: 
+        # === ACTIVIDAD ECONÓMICA ===
+        m = re.search(r'Actividad Económica:\s*([^\n]*)', txt, re.IGNORECASE)
+        if m:
             val = m.group(1).strip()
-            # Si captura basura (teléfono, pago), es porque estaba vacío
+            # Si captura basura, ignorar
             if any(x in val for x in ["Teléfono", "Forma de pago", "Medio"]) or len(val) < 2:
                 datos['Emisor_ActividadEconomica'] = ""
             else:
                 datos['Emisor_ActividadEconomica'] = self._limpiar_valor_fiscal(val)
         
-        # Ubicación Emisor
-        m = re.search(r'País:\s*([^\n]+)', txt);
+        # === UBICACIÓN EMISOR ===
+        m = re.search(r'País:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Emisor_Pais'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Dirección:\s*([^\n]+)', txt); 
+        
+        m = re.search(r'Dirección:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Emisor_Direccion'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Municipio / Ciudad:\s*([^\n]+)', txt); 
-        if m: datos['Emisor_Municipio'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Departamento:\s*([^\n]+)', txt); 
+        
+        patrones_municipio = [
+            r'Municipio / Ciudad:\s*([^\n]+)',
+            r'Municipio/Ciudad:\s*([^\n]+)',
+            r'Ciudad:\s*([^\n]+)',
+        ]
+        for patron in patrones_municipio:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Emisor_Municipio'] = self._limpiar_valor_fiscal(m.group(1))
+                break
+        
+        m = re.search(r'Departamento:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Emisor_Departamento'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Correo:\s*([^\n]+)', txt);
+        
+        m = re.search(r'Correo:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Emisor_Correo'] = self.limpiar_texto(m.group(1))
-        m = re.search(r'Teléfono / Móvil:\s*([^\n]+)', txt);
-        if m: datos['Emisor_Telefono'] = self._limpiar_valor_fiscal(m.group(1))
+        
+        patrones_telefono = [
+            r'Teléfono / Móvil:\s*([^\n]+)',
+            r'Teléfono:\s*([^\n]+)',
+            r'Móvil:\s*([^\n]+)',
+        ]
+        for patron in patrones_telefono:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Emisor_Telefono'] = self._limpiar_valor_fiscal(m.group(1))
+                break
 
     def _extraer_adquiriente(self, datos, texto):
-        bloque = re.search(r'Datos del Adquiriente(.*?)Detalles de Productos', texto, re.DOTALL | re.IGNORECASE)
+        """Extrae datos del adquiriente/cliente con PATRONES MÚLTIPLES"""
+        
+        # Intentar delimitar bloque (múltiples variantes)
+        bloque = re.search(
+            r'Datos del (?:Adquiriente|[Aa]dquirente|[Rr]eceptor|[Cc]omprador)(.*?)(?:Detalles de Productos|Detalle[s]? de [Pp]roducto|TOTALES|Referencias)',
+            texto, re.DOTALL | re.IGNORECASE
+        )
         txt = bloque.group(1) if bloque else texto
         
-        m = re.search(r'Tipo de Contribuyente:\s*([^\n]+)', txt)
-        if m: 
+        # === TIPO DE CONTRIBUYENTE ===
+        m = re.search(r'Tipo de [Cc]ontribuyente:\s*([^\n]+)', txt, re.IGNORECASE)
+        if m:
             val = self._limpiar_valor_fiscal(m.group(1))
             if 'Jurídica' in val or 'Juridica' in val: datos['Adq_Tipo'] = 'Jurídica'
             elif 'Natural' in val: datos['Adq_Tipo'] = 'Natural'
             else: datos['Adq_Tipo'] = val
 
-        m = re.search(r'(?:Nombre o )?Razón Social:\s*([^\n]+)', txt)
-        if m: self._procesar_nombre_adquiriente(m.group(1), datos)
+        # === RAZÓN SOCIAL ADQUIRIENTE ===
+        patrones_razon = [
+            r'(?:Nombre o )?Razón Social:\s*([^\n]+)',
+            r'Razón social:\s*([^\n]+)',
+            r'Nombre / Razón social:\s*([^\n]+)',
+            r'Nombre:\s*([^\n]+)',
+        ]
+        for patron in patrones_razon:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                self._procesar_nombre_adquiriente(m.group(1), datos)
+                break
 
-        m = re.search(r'Número Documento:\s*([\d\.-]+)', txt); 
-        if m: datos['Adq_NumeroDocumento'] = m.group(1)
+        # === NÚMERO DE DOCUMENTO ===
+        patrones_num_doc = [
+            r'Número Documento:\s*([\d\.-]+)',
+            r'Número de documento:\s*([\d\.-]+)',
+            r'NIT:\s*([\d\.-]+)',
+            r'N[úu]mero:\s*([\d\.-]+)',
+        ]
+        for patron in patrones_num_doc:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Adq_NumeroDocumento'] = m.group(1)
+                break
         
-        # Corrección Fiscales Cliente
-        m = re.search(r'Responsabilidad tributaria:\s*([^\n]+)', txt);
+        # === RESPONSABILIDAD TRIBUTARIA ===
+        m = re.search(r'Responsabilidad tributaria:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Adq_Responsabilidad'] = self._limpiar_valor_fiscal(m.group(1))
         
-        m = re.search(r'Régimen fiscal:\s*([^\n]+)', txt);
+        # === RÉGIMEN FISCAL ===
+        m = re.search(r'Régimen fiscal:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Adq_RegimenFiscal'] = self._limpiar_valor_fiscal(m.group(1))
         
-        m = re.search(r'País:\s*([^\n]+)', txt);
+        # === UBICACIÓN ===
+        m = re.search(r'País:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Adq_Pais'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Dirección:\s*([^\n]+)', txt); 
-        if m: datos['Adq_Direccion'] = self.limpiar_texto(m.group(1)) 
-        m = re.search(r'Municipio / Ciudad:\s*([^\n]+)', txt); 
-        if m: datos['Adq_Municipio'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Departamento:\s*([^\n]+)', txt); 
+        
+        m = re.search(r'Dirección:\s*([^\n]+)', txt, re.IGNORECASE)
+        if m: datos['Adq_Direccion'] = self.limpiar_texto(m.group(1))
+        
+        patrones_municipio = [
+            r'Municipio / Ciudad:\s*([^\n]+)',
+            r'Municipio/Ciudad:\s*([^\n]+)',
+            r'Ciudad:\s*([^\n]+)',
+        ]
+        for patron in patrones_municipio:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Adq_Municipio'] = self._limpiar_valor_fiscal(m.group(1))
+                break
+        
+        m = re.search(r'Departamento:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Adq_Departamento'] = self._limpiar_valor_fiscal(m.group(1))
-        m = re.search(r'Correo:\s*([^\n]+)', txt); 
+        
+        m = re.search(r'Correo:\s*([^\n]+)', txt, re.IGNORECASE)
         if m: datos['Adq_Correo'] = self.limpiar_texto(m.group(1))
-        m = re.search(r'Teléfono / Móvil:\s*([^\n]+)', txt);
-        if m: datos['Adq_Telefono'] = self._limpiar_valor_fiscal(m.group(1))
+        
+        patrones_telefono = [
+            r'Teléfono / Móvil:\s*([^\n]+)',
+            r'Teléfono:\s*([^\n]+)',
+            r'Móvil:\s*([^\n]+)',
+        ]
+        for patron in patrones_telefono:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                datos['Adq_Telefono'] = self._limpiar_valor_fiscal(m.group(1))
+                break
 
     def _extraer_totales(self, datos, texto):
+        """Extrae valores financieros con PATRONES MÚLTIPLES MEJORADOS"""
         patrones = {
-            'Subtotal': [r'Subtotal\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', r'"Subtotal\s*",,"([\d\.,]+)'],
-            'Total_Bruto': [r'Total Bruto Factura\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'],
-            'IVA': [r'IVA\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', r'Total impuesto.*?(=).*?([\d\.,]+)'],
-            'INC': [r'INC\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'],
-            'Bolsas': [r'Bolsas\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'],
-            'Otros_Impuestos': [r'Otros impuestos\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'],
-            'Total_Factura': [r'Total factura\s*\(=\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', r'Total a Pagar.*?([\d\.,]+)'],
-            'Anticipos': [r'Anticipos\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)', r'ANTICIPOS\s*[\n\r]*\s*([\d\.,]+)'],
-            'Rete_Fuente': [r'Rete fuente\s*"?([\d\.,]+)"?', r'Retención en la fuente.*?([\d\.,]+)'],
-            'Rete_ICA': [r'Rete ICA\s*"?([\d\.,]+)"?'],
-            'Rete_IVA': [r'Rete IVA\s*"?([\d\.,]+)"?']
+            'Subtotal': [
+                r'Subtotal\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Subtotal base gravable\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'"Subtotal\s*",,"([\d\.,]+)'
+            ],
+            'Total_Bruto': [
+                r'Total Bruto Factura\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Total [Bb]ruto\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Total bruto documento\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            ],
+            'IVA': [
+                r'IVA\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Total impuesto.*?(=).*?([\d\.,]+)',
+                r'Total IVA\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            ],
+            'INC': [
+                r'INC\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'
+            ],
+            'Bolsas': [
+                r'Bolsas\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'
+            ],
+            'Otros_Impuestos': [
+                r'Otros impuestos\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)'
+            ],
+            'Total_Factura': [
+                r'Total factura\s*\(=\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Total a Pagar\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'TOTAL A PAGAR\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Total neto factura\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Total documento\s+COP\s+\$\s*\(=\)\s*([\d\.,]+)',
+                r'Total neto documento\s*\(=\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'TOTAL\s+DOCUMENTO\s+COP\s+\$\s+\(=\)\s*([\d\.,]+)',
+            ],
+            'Anticipos': [
+                r'Anticipos\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'ANTICIPOS\s*[\n\r]*\s*([\d\.,]+)'
+            ],
+            'Rete_Fuente': [
+                r'Rete fuente\s*"?([\d\.,]+)"?',
+                r'Retención en la fuente.*?([\d\.,]+)',
+                r'ReteFuente\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            ],
+            'Rete_ICA': [
+                r'Rete ICA\s*"?([\d\.,]+)"?',
+                r'ReteICA\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            ],
+            'Rete_IVA': [
+                r'Rete IVA\s*"?([\d\.,]+)"?',
+                r'ReteIVA\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            ]
         }
+        
         for campo, lista_regex in patrones.items():
             for regex in lista_regex:
                 m = re.search(regex, texto, re.IGNORECASE | re.DOTALL)
@@ -281,6 +519,15 @@ class ExtractorPDF:
                     datos[campo] = self.limpiar_monto(valor)
                     break
 
-def extraer_datos_pdf(ruta_pdf, cufe_original, numero):
+def extraer_datos_pdf(ruta_pdf, cufe_original, numero, tipo_documento=None):
+    """
+    Función wrapper para mantener compatibilidad
+    
+    Args:
+        ruta_pdf: Ruta al PDF
+        cufe_original: CUFE del documento
+        numero: Número de orden
+        tipo_documento: Info de tipo (opcional, puede ser None)
+    """
     extractor = ExtractorPDF()
-    return extractor.extraer_datos(ruta_pdf, cufe_original, numero)
+    return extractor.extraer_datos(ruta_pdf, cufe_original, numero, tipo_documento)
