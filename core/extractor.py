@@ -1,13 +1,18 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
-v7.5 - FIX CRÍTICO: IVA capturaba teléfono del adquiriente
+v7.5.1 - FIX CRÍTICO: IVA capturaba teléfono + Teléfono no se extraía
 ═══════════════════════════════════════════════════════════════════════════
 
-FIX v7.5:
+FIX v7.5 (IVA):
 1. _extraer_totales ahora busca SOLO en bloque "Datos Totales" (no en todo el texto)
 2. Validación de montos: rechaza valores > 100 mil millones (teléfonos capturados)
 3. Regex de IVA no salta líneas para evitar capturar campo siguiente
+
+FIX v7.5.1 (Teléfono):
+4. Nuevo método _extraer_telefono_bloque() maneja pdfplumber mezclando columnas
+5. Busca teléfono en misma línea Y en líneas siguientes (hasta 4 líneas)
+6. Detecta números de 7+ dígitos que pdfplumber pone en líneas separadas
 """
 
 import os
@@ -94,6 +99,45 @@ class ExtractorPDF:
             return ""
         
         return resultado
+
+    def _extraer_telefono_bloque(self, txt):
+        """
+        FIX v7.5.1: Extrae teléfono manejando el caso donde pdfplumber
+        pone el número en una línea diferente a la etiqueta.
+        
+        pdfplumber a veces extrae:
+            Teléfono / Móvil:
+            Responsabilidad tributaria: 01 - IVA
+            60131145226300006013142198618000
+        
+        En vez de:
+            Teléfono / Móvil: 60131145226300006013142198618000
+        """
+        # Intento 1: Teléfono en la MISMA línea (caso normal)
+        patrones_misma_linea = [
+            r'Teléfono / Móvil:\s*([\d|+\-()]{7,}[^\n]*)',
+            r'Teléfono:\s*([\d|+\-()]{7,}[^\n]*)',
+            r'Móvil:\s*([\d|+\-()]{7,}[^\n]*)',
+        ]
+        for patron in patrones_misma_linea:
+            m = re.search(patron, txt, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+        
+        # Intento 2: Teléfono en SIGUIENTE(S) línea(s) (pdfplumber mezcló columnas)
+        # Buscar "Teléfono / Móvil:" y luego un número largo en las siguientes 3 líneas
+        m_etiqueta = re.search(r'Teléfono / Móvil:', txt, re.IGNORECASE)
+        if m_etiqueta:
+            resto = txt[m_etiqueta.end():]
+            lineas = resto.split('\n')[:4]  # Revisar hasta 4 líneas después
+            for linea in lineas:
+                linea = linea.strip()
+                # Buscar línea que sea mayoritariamente un número de teléfono
+                m_num = re.match(r'^([\d|+\-()]{7,})$', linea)
+                if m_num:
+                    return m_num.group(1)
+        
+        return ''
 
     def _procesar_nombre_adquiriente(self, nombre_bruto, datos):
         if not nombre_bruto: 
@@ -363,18 +407,10 @@ class ExtractorPDF:
             if val and val != 'No aplica':
                 datos['Emisor_Direccion'] = val
         
-        patrones_telefono = [
-            r'Teléfono / Móvil:\s*([^\n]+)',
-            r'Teléfono:\s*([^\n]+)',
-            r'Móvil:\s*([^\n]+)',
-        ]
-        for patron in patrones_telefono:
-            m = re.search(patron, txt, re.IGNORECASE)
-            if m:
-                val = self._limpiar_campo_pegado(m.group(1), ['Correo', 'Email', 'Actividad'])
-                if val:
-                    datos['Emisor_Telefono'] = val
-                    break
+        # FIX v7.5.1: Usar método robusto para teléfono
+        tel = self._extraer_telefono_bloque(txt)
+        if tel:
+            datos['Emisor_Telefono'] = tel
         
         m = re.search(r'Correo:\s*([^\n]+)', txt, re.IGNORECASE)
         if m:
@@ -473,18 +509,10 @@ class ExtractorPDF:
             if val and val != 'No aplica':
                 datos['Adq_Direccion'] = val
         
-        patrones_telefono = [
-            r'Teléfono / Móvil:\s*([^\n]+)',
-            r'Teléfono:\s*([^\n]+)',
-            r'Móvil:\s*([^\n]+)',
-        ]
-        for patron in patrones_telefono:
-            m = re.search(patron, txt, re.IGNORECASE)
-            if m:
-                val = self._limpiar_campo_pegado(m.group(1), ['Correo', 'Email'])
-                if val:
-                    datos['Adq_Telefono'] = val
-                    break
+        # FIX v7.5.1: Usar método robusto para teléfono
+        tel = self._extraer_telefono_bloque(txt)
+        if tel:
+            datos['Adq_Telefono'] = tel
         
         m = re.search(r'Correo:\s*([^\n]+)', txt, re.IGNORECASE)
         if m:
