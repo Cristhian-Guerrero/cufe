@@ -187,7 +187,7 @@ class ValidadorCUFE:
         except Exception as e:
             return [], f"❌ Error leyendo archivo Excel: {str(e)}"
     
-    def cargar_y_validar(self, ruta_archivo: str) -> Tuple[List[str], Dict[str, any]]:
+    def cargar_y_validar(self, ruta_archivo: str, eliminar_duplicados: bool = True) -> Tuple[List[str], Dict[str, any]]:
         """
         Carga y valida CUFEs desde archivo (.txt o .xlsx)
         
@@ -230,17 +230,20 @@ class ValidadorCUFE:
         self.cufes_validos = []
         self.cufes_invalidos = []
         self.duplicados_eliminados = 0
-        
+
         for idx, cufe in enumerate(lineas, 1):
             # Verificar duplicados
             if cufe in cufes_vistos:
                 self.duplicados_eliminados += 1
-                log(0, f"⚠️  CUFE #{idx} duplicado (ignorado)", "WARN")
-                continue
-            
+                if eliminar_duplicados:
+                    log(0, f"⚠️  CUFE #{idx} duplicado (ignorado)", "WARN")
+                    continue
+                else:
+                    log(0, f"ℹ️  CUFE #{idx} duplicado (conservado)", "INFO")
+
             # Validar formato
             es_valido, razon = self.es_cufe_valido(cufe)
-            
+
             if es_valido:
                 self.cufes_validos.append(cufe)
                 cufes_vistos.add(cufe)
@@ -303,20 +306,21 @@ class ValidadorCUFE:
 # FUNCIÓN DE CONVENIENCIA (compatibilidad con código original)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def cargar_cufes(ruta_archivo: str) -> List[str]:
+def cargar_cufes(ruta_archivo: str, eliminar_duplicados: bool = True) -> List[str]:
     """
     Función wrapper para mantener compatibilidad con código original
-    
+
     Soporta archivos .txt y .xlsx automáticamente
-    
+
     Args:
         ruta_archivo: Ruta del archivo de CUFEs (.txt o .xlsx)
-        
+        eliminar_duplicados: Si False, conserva CUFEs repetidos en el resultado
+
     Returns:
         Lista de CUFEs válidos
     """
     validador = ValidadorCUFE()
-    cufes, stats = validador.cargar_y_validar(ruta_archivo)
+    cufes, stats = validador.cargar_y_validar(ruta_archivo, eliminar_duplicados=eliminar_duplicados)
     
     # Si hay errores críticos, retornar lista vacía
     if stats.get('error') or stats.get('validos', 0) == 0:

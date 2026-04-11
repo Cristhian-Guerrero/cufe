@@ -75,6 +75,38 @@ def guardar_progreso_parcial(datos_completos, resultados):
 atexit.register(limpiar_al_salir)
 
 
+def _separar_duplicados(cufes):
+    """Separa únicos y construye mapa de expansión."""
+    vistos = {}
+    cufes_unicos = []
+    mapa_expansion = []
+    for cufe in cufes:
+        if cufe not in vistos:
+            vistos[cufe] = len(cufes_unicos)
+            cufes_unicos.append(cufe)
+        mapa_expansion.append(vistos[cufe])
+    return cufes_unicos, mapa_expansion
+
+
+def _expandir_datos(cufes_original, mapa_expansion, datos_procesados):
+    """Expande datos únicos al orden original, reutilizando datos del primer registro."""
+    import copy
+    por_cufe = {}
+    for d in datos_procesados:
+        cufe = d.get('CUFE', '')
+        if cufe and cufe not in por_cufe:
+            por_cufe[cufe] = d
+
+    resultado = []
+    for nuevo_num, cufe in enumerate(cufes_original, 1):
+        original = por_cufe.get(cufe)
+        if original:
+            fila = copy.deepcopy(original)
+            fila['Numero'] = nuevo_num
+            resultado.append(fila)
+    return resultado
+
+
 def main():
     """Función principal del sistema"""
     import sys
@@ -98,12 +130,18 @@ def main():
     print()
     
     # Cargar y validar CUFEs
-    cufes = cargar_cufes(archivo_cufes)
-    
+    cufes = cargar_cufes(archivo_cufes, eliminar_duplicados=settings.eliminar_duplicados)
+
     if not cufes:
         log(0, "❌ No hay CUFEs válidos para procesar", "CRIT")
         return
-    
+
+    # Separar únicos y construir mapa de duplicados
+    cufes_unicos, mapa_expansion = _separar_duplicados(cufes)
+    hay_duplicados = len(cufes_unicos) < len(cufes)
+    if hay_duplicados:
+        log(0, f"ℹ️  {len(cufes) - len(cufes_unicos)} duplicados se reutilizarán sin re-descargar", "INFO")
+
     # Configuración para el orquestador
     config = {
         'dian_url': settings.dian_url,
@@ -112,23 +150,30 @@ def main():
         'num_navegadores': settings.num_navegadores,
         'max_reintentos': settings.max_reintentos
     }
-    
-    # Ajuste dinámico de navegadores
-    num_navegadores = min(len(cufes), config['num_navegadores'])
-    
-    log(0, f"📋 {len(cufes)} CUFEs", "INFO")
+
+    # Ajuste dinámico de navegadores (solo sobre únicos)
+    num_navegadores = min(len(cufes_unicos), config['num_navegadores'])
+
+    log(0, f"📋 {len(cufes)} CUFEs ({len(cufes_unicos)} únicos)", "INFO")
     log(0, f"🚀 {num_navegadores} navegadores paralelos", "INFO")
     log(0, f"🔄 {config['max_reintentos']} reintentos automáticos", "INFO")
     log(0, f"📁 {config['carpeta_pdfs']}/", "INFO")
     log(0, f"📊 {config['archivo_excel']}", "INFO")
     print()
+
+    # Ejecutar sistema solo con CUFEs únicos
+    resultado = ejecutar_sistema(cufes_unicos, config)
     
-    # Ejecutar sistema
-    resultado = ejecutar_sistema(cufes, config)
-    
+    # Expandir datos con duplicados y regenerar Excel si aplica
+    if hay_duplicados:
+        from core.excel_generator import generar_excel_final
+        resultado['datos_completos'] = _expandir_datos(cufes, mapa_expansion, resultado['datos_completos'])
+        generar_excel_final(config['archivo_excel'], resultado['datos_completos'])
+        log(0, f"ℹ️  Excel regenerado: {len(resultado['datos_completos'])} filas (incluye duplicados)", "INFO")
+
     # Guardar mapping
     guardar_mapping()
-    
+
     # Mostrar resultados
     print("\n" + "="*70)
     print("📊 RESULTADOS FINALES")

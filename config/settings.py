@@ -148,6 +148,11 @@ class Settings:
     def headless(self):
         """Modo headless de navegadores"""
         return self._config['navegadores']['headless']
+
+    @property
+    def eliminar_duplicados(self):
+        """Si True, elimina CUFEs duplicados antes de procesar"""
+        return self._config['validaciones'].get('eliminar_duplicados', True)
     
     # ═══════════════════════════════════════════════════════════════════════
     # MÉTODOS DE UTILIDAD

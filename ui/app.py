@@ -32,7 +32,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '4.7.2',
+    'version': '4.8.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
@@ -58,6 +58,48 @@ C = {
 }
 
 
+def _separar_duplicados(cufes):
+    """
+    Separa únicos y construye mapa de expansión.
+    Retorna (cufes_unicos, mapa_expansion).
+    mapa_expansion[i] = índice en cufes_unicos al que corresponde cufes[i].
+    """
+    vistos = {}
+    cufes_unicos = []
+    mapa_expansion = []
+    for cufe in cufes:
+        if cufe not in vistos:
+            vistos[cufe] = len(cufes_unicos)
+            cufes_unicos.append(cufe)
+        mapa_expansion.append(vistos[cufe])
+    return cufes_unicos, mapa_expansion
+
+
+def _expandir_datos(cufes_original, mapa_expansion, datos_procesados):
+    """
+    Expande datos_procesados (solo únicos) al orden original con duplicados.
+    Reutiliza el PDF y datos del primer registro de cada CUFE repetido.
+    """
+    import copy
+
+    # Indexar por CUFE (primer registro encontrado por CUFE)
+    por_cufe = {}
+    for d in datos_procesados:
+        cufe = d.get('CUFE', '')
+        if cufe and cufe not in por_cufe:
+            por_cufe[cufe] = d
+
+    resultado = []
+    for nuevo_num, cufe in enumerate(cufes_original, 1):
+        original = por_cufe.get(cufe)
+        if original:
+            fila = copy.deepcopy(original)
+            fila['Numero'] = nuevo_num
+            resultado.append(fila)
+
+    return resultado
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -74,6 +116,7 @@ class App(tk.Tk):
         self.stop_requested = False
         self.archivo_var = tk.StringVar(value="")
         self.carpeta_var = tk.StringVar(value=os.path.expanduser("~"))
+        self.conservar_duplicados = tk.BooleanVar(value=False)
         self.cufes_validos = []
         self.cufes_invalidos = []
         self.duplicados = 0
@@ -207,15 +250,23 @@ class App(tk.Tk):
         self.lbl_dup = tk.Label(ind, text="◐ 0", font=('Segoe UI', 10),
                                fg=C['warning'], bg=C['bg'])
         self.lbl_dup.pack(side=tk.LEFT, padx=(0, 20))
-        
+
         self.lbl_total = tk.Label(ind, text="Total: 0", font=('Segoe UI', 10, 'bold'),
                                  fg=C['primary'], bg=C['bg'])
-        self.lbl_total.pack(side=tk.LEFT)
-        
+        self.lbl_total.pack(side=tk.LEFT, padx=(0, 20))
+
         # Botones derecha
         btns = tk.Frame(ctrl_frame, bg=C['bg'])
         btns.pack(side=tk.RIGHT)
-        
+
+        self.btn_duplicados = tk.Button(
+            btns, text="◈ Duplicados: OFF",
+            font=('Segoe UI', 9), relief='flat', cursor='hand2',
+            bg=C['border'], fg=C['text_soft'], padx=10, pady=5,
+            command=self._on_toggle_duplicados
+        )
+        self.btn_duplicados.pack(side=tk.LEFT, padx=(0, 8))
+
         self.btn_excel = tk.Button(btns, text="📊 Excel", font=('Segoe UI', 9, 'bold'),
                                   bg=C['border'], fg=C['text_soft'], relief='flat',
                                   state=tk.DISABLED, padx=12, pady=5, cursor='hand2',
@@ -390,7 +441,8 @@ class App(tk.Tk):
         self.cufes_invalidos = []
         seen = set()
         self.duplicados = 0
-        
+        conservar = self.conservar_duplicados.get()
+
         pat = re.compile(r'^[a-fA-F0-9]{96}$')
         for c in cufes:
             c = c.strip()
@@ -398,25 +450,49 @@ class App(tk.Tk):
                 self.cufes_invalidos.append(c)
             elif c in seen:
                 self.duplicados += 1
+                if conservar:
+                    self.cufes_validos.append(c)
             else:
                 seen.add(c)
                 self.cufes_validos.append(c)
-        
+
         n_ok = len(self.cufes_validos)
         n_bad = len(self.cufes_invalidos)
-        
+
         self.lbl_valid.config(text=f"✓ {n_ok}")
         self.lbl_invalid.config(text=f"✗ {n_bad}")
         self.lbl_dup.config(text=f"◐ {self.duplicados}")
         self.lbl_total.config(text=f"Total: {n_ok}")
-        
+
         if n_ok > 0:
             self.btn_start.config(state=tk.NORMAL, bg=C['success'], fg='white')
             self.lbl_status.config(text="Listo para iniciar")
-            self.log(f"✓ {n_ok} CUFEs válidos", "success")
+            if self.duplicados > 0 and conservar:
+                self.log(f"✓ {n_ok} CUFEs ({self.duplicados} duplicados conservados)", "success")
+            elif self.duplicados > 0:
+                self.log(f"✓ {n_ok} CUFEs válidos ({self.duplicados} duplicados eliminados)", "success")
+            else:
+                self.log(f"✓ {n_ok} CUFEs válidos", "success")
         else:
             self.btn_start.config(state=tk.DISABLED, bg=C['border'], fg=C['text_soft'])
             self.log("No hay CUFEs válidos", "warning")
+
+    def _on_toggle_duplicados(self):
+        """Alterna la opción de conservar duplicados y re-valida"""
+        self.conservar_duplicados.set(not self.conservar_duplicados.get())
+        if self.conservar_duplicados.get():
+            self.btn_duplicados.config(
+                text="◈ Duplicados: ON",
+                bg=C['warning'], fg='white'
+            )
+        else:
+            self.btn_duplicados.config(
+                text="◈ Duplicados: OFF",
+                bg=C['border'], fg=C['text_soft']
+            )
+        archivo = self.archivo_var.get()
+        if archivo:
+            self.validar_archivo(archivo)
     
     # === PROCESO ===
     def iniciar(self):
@@ -486,26 +562,44 @@ class App(tk.Tk):
                 self.log(msg, tipo)
                 self.after(0, lambda: self.lbl_status.config(text=msg[:40]))
             
-            res = ejecutar_sistema(self.cufes_validos, cfg,
+            # Separar únicos y guardar mapa de duplicados
+            cufes_unicos, mapa_expansion = _separar_duplicados(self.cufes_validos)
+            hay_duplicados = len(cufes_unicos) < len(self.cufes_validos)
+
+            if hay_duplicados:
+                self.log(f"ℹ {len(self.cufes_validos) - len(cufes_unicos)} duplicados se reutilizarán sin re-descargar", "info")
+
+            cfg['num_navegadores'] = min(len(cufes_unicos), APP['max_nav'])
+
+            res = ejecutar_sistema(cufes_unicos, cfg,
                                   callback_progreso=cb_prog,
                                   callback_mensaje=cb_msg)
-            
+
             if not self.stop_requested:
                 self.resultado = res
                 self.excel_path = excel
-                
+
+                # Expandir datos con duplicados y regenerar Excel si aplica
+                if hay_duplicados:
+                    res['datos_completos'] = _expandir_datos(
+                        self.cufes_validos, mapa_expansion, res['datos_completos']
+                    )
+                    from core.excel_generator import generar_excel_final
+                    generar_excel_final(excel, res['datos_completos'])
+                    self.log(f"ℹ Excel regenerado: {len(res['datos_completos'])} filas (incluye duplicados)", "info")
+
                 r = res['resultados']
                 ok = len([x for x in r if x['estado'] == 'exitoso'])
                 err = len([x for x in r if x['estado'] == 'error'])
                 dur = res['duracion']
-                
+
                 self.log("─" * 35, "info")
                 self.log(f"✓ Completado: {ok} exitosos, {err} errores", "success")
                 self.log(f"⏱ Tiempo: {dur:.1f}s", "info")
-                
+
                 # Limpiar temporales
                 self._limpiar_temporales(temp)
-                
+
                 self.after(0, lambda: self._update_prog(100, self.total, self.total))
             
             self.after(0, self._finalizar)
