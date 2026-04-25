@@ -32,7 +32,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '4.8.0',
+    'version': '4.9.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
@@ -588,13 +588,26 @@ class App(tk.Tk):
                     generar_excel_final(excel, res['datos_completos'])
                     self.log(f"ℹ Excel regenerado: {len(res['datos_completos'])} filas (incluye duplicados)", "info")
 
+                # Agregar hoja "No Procesados" al Excel ya generado
+                from core.excel_generator import agregar_hoja_no_procesados
+                errores_hoja = [x for x in res['resultados']
+                                if x['estado'] in ('error', 'no_encontrado')]
+                invalidos_fmt = [{'cufe': c, 'razon': 'Formato de CUFE inválido', 'linea': None}
+                                 for c in self.cufes_invalidos]
+                agregar_hoja_no_procesados(excel, errores_hoja, invalidos_fmt)
+
                 r = res['resultados']
-                ok = len([x for x in r if x['estado'] == 'exitoso'])
-                err = len([x for x in r if x['estado'] == 'error'])
+                ok       = len([x for x in r if x['estado'] == 'exitoso'])
+                no_enc   = len([x for x in r if x['estado'] == 'no_encontrado'])
+                err      = len([x for x in r if x['estado'] == 'error'])
                 dur = res['duracion']
 
                 self.log("─" * 35, "info")
-                self.log(f"✓ Completado: {ok} exitosos, {err} errores", "success")
+                self.log(f"✓ Exitosos: {ok}", "success")
+                if no_enc:
+                    self.log(f"⚠ No encontrados en DIAN: {no_enc}", "warning")
+                if err:
+                    self.log(f"✗ Errores: {err}", "error")
                 self.log(f"⏱ Tiempo: {dur:.1f}s", "info")
 
                 # Limpiar temporales

@@ -129,8 +129,10 @@ def main():
     print("="*70)
     print()
     
-    # Cargar y validar CUFEs
-    cufes = cargar_cufes(archivo_cufes, eliminar_duplicados=settings.eliminar_duplicados)
+    # Cargar y validar CUFEs (los inválidos se capturan para el reporte)
+    invalidos_validacion = []
+    cufes = cargar_cufes(archivo_cufes, eliminar_duplicados=settings.eliminar_duplicados,
+                         invalidos_out=invalidos_validacion)
 
     if not cufes:
         log(0, "❌ No hay CUFEs válidos para procesar", "CRIT")
@@ -187,6 +189,12 @@ def main():
     exitosos = [r for r in resultados if r['estado'] == 'exitoso']
     no_encontrados = [r for r in resultados if r['estado'] == 'no_encontrado']
     errores = [r for r in resultados if r['estado'] == 'error']
+
+    # Generar hoja "No Procesados" en el Excel ya creado
+    from core.excel_generator import agregar_hoja_no_procesados
+    agregar_hoja_no_procesados(config['archivo_excel'],
+                               no_encontrados + errores,
+                               invalidos_validacion)
     
     log(0, f"✅ Exitosos: {len(exitosos)}/{len(cufes)}", "OK")
     log(0, f"⚠️ No encontrados: {len(no_encontrados)}", "WARN")

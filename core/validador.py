@@ -250,7 +250,7 @@ class ValidadorCUFE:
             else:
                 self.cufes_invalidos.append({
                     'linea': idx,
-                    'cufe': cufe[:20] + '...' if len(cufe) > 20 else cufe,
+                    'cufe': cufe,
                     'razon': razon
                 })
                 log(0, f"⚠️  CUFE #{idx} inválido: {razon}", "WARN")
@@ -306,7 +306,7 @@ class ValidadorCUFE:
 # FUNCIÓN DE CONVENIENCIA (compatibilidad con código original)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def cargar_cufes(ruta_archivo: str, eliminar_duplicados: bool = True) -> List[str]:
+def cargar_cufes(ruta_archivo: str, eliminar_duplicados: bool = True, invalidos_out: list = None) -> List[str]:
     """
     Función wrapper para mantener compatibilidad con código original
 
@@ -315,17 +315,22 @@ def cargar_cufes(ruta_archivo: str, eliminar_duplicados: bool = True) -> List[st
     Args:
         ruta_archivo: Ruta del archivo de CUFEs (.txt o .xlsx)
         eliminar_duplicados: Si False, conserva CUFEs repetidos en el resultado
+        invalidos_out: Lista opcional; si se provee, se rellena con los CUFEs inválidos
+                       encontrados (dicts con claves 'cufe', 'razon', 'linea')
 
     Returns:
         Lista de CUFEs válidos
     """
     validador = ValidadorCUFE()
     cufes, stats = validador.cargar_y_validar(ruta_archivo, eliminar_duplicados=eliminar_duplicados)
-    
+
+    if invalidos_out is not None:
+        invalidos_out.extend(validador.cufes_invalidos)
+
     # Si hay errores críticos, retornar lista vacía
     if stats.get('error') or stats.get('validos', 0) == 0:
         return []
-    
+
     return cufes
 
 

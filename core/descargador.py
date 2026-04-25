@@ -18,6 +18,7 @@ import threading
 import json
 import shutil
 import tempfile
+from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from utils import log
 
@@ -499,7 +500,8 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         'ruta_pdf': None,
         'eventos': '',
         'mensaje': '',
-        'intento': intento
+        'intento': intento,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
     carpeta_abs = os.path.abspath(carpeta_pdfs)

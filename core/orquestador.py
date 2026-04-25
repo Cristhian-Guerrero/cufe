@@ -10,6 +10,7 @@ import threading
 import queue
 import os
 import subprocess # Necesario para abrir el archivo en Linux
+from datetime import datetime
 from utils import log
 from core.descargador import (
     inicializar_navegador, 
@@ -347,7 +348,9 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
             cufe = item[0]; numero = item[1]; intento = item[3]
             cola_resultados.put({
                 'numero': numero, 'cufe': cufe, 'estado': 'error',
-                'mensaje': f'No procesado (intento {intento})'
+                'mensaje': f'No procesado (intento {intento})',
+                'intento': intento,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             })
         except: break
     

@@ -244,3 +244,227 @@ class GeneradorExcel:
 def generar_excel_final(nombre_archivo, datos_completos):
     generador = GeneradorExcel(nombre_archivo)
     return generador.generar(datos_completos)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HOJA "NO PROCESADOS" — captura todo lo que no llegó al Excel principal
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _motivo_legible(mensaje: str) -> str:
+    """Convierte el mensaje técnico del resultado en descripción legible."""
+    if not mensaje:
+        return 'Error desconocido'
+    mapa = [
+        ('No existe en DIAN',           'CUFE no registrado en la DIAN'),
+        ('Campo CUFE no encontrado',     'Error de conexión: campo de búsqueda no disponible'),
+        ('Botón búsqueda no encontrado', 'Error de conexión: botón de búsqueda no disponible'),
+        ('Timeout botón PDF',            'Timeout: el botón de descarga PDF no apareció'),
+        ('PDF no detectado',             'Timeout: PDF no fue detectado en carpeta de descargas'),
+        ('Timeout PDF',                  'Timeout: descarga de PDF excedió el tiempo límite'),
+        ('Falló tras',                   'Error definitivo tras múltiples reintentos'),
+        ('No procesado (intento',        'Cola de reintentos agotada sin éxito'),
+    ]
+    for clave, descripcion in mapa:
+        if clave in mensaje:
+            return descripcion
+    if 'Error:' in mensaje:
+        detalle = mensaje[mensaje.index('Error:') + 6:].strip()[:80]
+        return f'Error técnico: {detalle}'
+    return mensaje[:100]
+
+
+def agregar_hoja_no_procesados(nombre_archivo: str,
+                                errores_descarga: list,
+                                invalidos_validacion: list = None) -> bool:
+    """
+    Agrega la hoja 'No Procesados' al Excel ya generado por generar_excel_final().
+
+    Args:
+        nombre_archivo      : Ruta del Excel existente (Reporte_YYYYMMDD_HHMMSS.xlsx).
+        errores_descarga    : Lista de dicts resultado del orquestador con
+                              estado in ('error', 'no_encontrado').
+        invalidos_validacion: Lista opcional de dicts {'cufe', 'razon', 'linea'}
+                              con CUFEs que fallaron ANTES de intentar descargarse.
+                              También acepta strings planos por compatibilidad con ui/app.py.
+
+    Returns:
+        True si se generó correctamente, False en caso de error.
+    """
+    from datetime import datetime
+
+    if not os.path.exists(nombre_archivo):
+        log(98, f"❌ No se puede agregar hoja 'No Procesados': archivo no encontrado", "ERROR")
+        return False
+
+    # ── Construir filas normalizadas ──────────────────────────────────────────
+    filas = []
+    num = 1
+
+    # 1. Inválidos de validación (intentos = 0, nunca se intentó la descarga)
+    if invalidos_validacion:
+        ts_ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        for inv in invalidos_validacion:
+            if isinstance(inv, dict):
+                cufe  = inv.get('cufe', '')
+                razon = inv.get('razon', 'Formato inválido')
+                linea = inv.get('linea', '')
+            else:                          # string plano (compat. ui/app.py)
+                cufe, razon, linea = str(inv), 'Formato de CUFE inválido', ''
+
+            filas.append({
+                'Numero':        num,
+                'CUFE':          cufe,
+                'Motivo':        f'Formato CUFE inválido: {razon}',
+                'Intentos':      0,
+                'Timestamp':     ts_ahora,
+                'Observaciones': f'Línea {linea} del archivo de entrada' if linea else 'Detectado en validación previa',
+            })
+            num += 1
+
+    # 2. Errores y no-encontrados de la descarga
+    for r in errores_descarga:
+        mensaje = r.get('mensaje', '')
+        filas.append({
+            'Numero':        num,
+            'CUFE':          r.get('cufe', ''),
+            'Motivo':        _motivo_legible(mensaje),
+            'Intentos':      r.get('intento', 1),
+            'Timestamp':     r.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            'Observaciones': mensaje if len(mensaje) > 5 else '',
+        })
+        num += 1
+
+    if not filas:
+        log(98, "ℹ️  Sin errores que registrar — hoja 'No Procesados' omitida", "INFO")
+        return True
+
+    # ── Paleta y estilos (consistentes con GeneradorExcel) ───────────────────
+    COLOR_HDR   = '7B1C1C'   # rojo oscuro — tema error
+    COLOR_PAR   = 'FFF5F5'   # rosa muy suave para filas alternas
+    BLANCO      = 'FFFFFF'
+
+    font_titulo  = Font(name='Segoe UI', size=16, bold=True,  color='404040')
+    font_kpi_lbl = Font(name='Segoe UI', size=9,              color='666666')
+    font_kpi_val = Font(name='Segoe UI', size=14, bold=True,  color=COLOR_HDR)
+    font_grp     = Font(name='Segoe UI', size=10, bold=True,  color=BLANCO)
+    font_hdr     = Font(name='Segoe UI', size=9,  bold=True,  color=BLANCO)
+    font_data    = Font(name='Segoe UI', size=9)
+    font_cufe    = Font(name='Consolas', size=8,              color='444444')
+    font_motivo  = Font(name='Segoe UI', size=9,  bold=True,  color='C0392B')
+
+    side_thin = Side(style='thin',   color='BFBFBF')
+    side_med  = Side(style='medium', color=BLANCO)
+    borde     = Border(left=side_thin, right=side_thin, top=side_thin, bottom=side_thin)
+
+    ac = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    al = Alignment(horizontal='left',   vertical='center', wrap_text=True)
+    aw = Alignment(horizontal='left',   vertical='center', wrap_text=False)
+
+    # (clave_dict, título_col, ancho)
+    COLUMNAS = [
+        ('Numero',        'N°',               6),
+        ('CUFE',          'CUFE',            36),
+        ('Motivo',        'Motivo del Error', 35),
+        ('Intentos',      'Intentos',         10),
+        ('Timestamp',     'Último Intento',   18),
+        ('Observaciones', 'Observaciones',    35),
+    ]
+    N = len(COLUMNAS)
+
+    try:
+        wb = load_workbook(nombre_archivo)
+
+        if 'No Procesados' in wb.sheetnames:
+            del wb['No Procesados']
+
+        ws = wb.create_sheet('No Procesados')
+
+        # ── Fila 2: Título ────────────────────────────────────────────────────
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=N)
+        c = ws.cell(row=2, column=1)
+        c.value     = 'REPORTE DE DOCUMENTOS NO PROCESADOS'
+        c.font      = font_titulo
+        c.alignment = Alignment(horizontal='left', vertical='center')
+        ws.row_dimensions[2].height = 28
+
+        # ── Filas 3-4: Dashboard KPI ──────────────────────────────────────────
+        ws['A3'] = 'TOTAL NO PROCESADOS'
+        ws['A3'].font      = font_kpi_lbl
+        ws['A3'].alignment = ac
+
+        ws['C3'] = 'FECHA GENERACIÓN'
+        ws['C3'].font      = font_kpi_lbl
+        ws['C3'].alignment = ac
+
+        ws['A4'] = len(filas)
+        ws['A4'].font      = font_kpi_val
+        ws['A4'].alignment = ac
+        ws['A4'].border    = Border(bottom=Side(style='thick', color=COLOR_HDR))
+
+        ws['C4'] = datetime.now().strftime('%d/%m/%Y %H:%M')
+        ws['C4'].font      = Font(name='Segoe UI', size=11, bold=True, color='404040')
+        ws['C4'].alignment = ac
+        ws['C4'].border    = Border(bottom=Side(style='thick', color=COLOR_HDR))
+
+        ws.row_dimensions[3].height = 16
+        ws.row_dimensions[4].height = 24
+
+        # ── Fila 6: Cabecera de grupo ─────────────────────────────────────────
+        ws.merge_cells(start_row=6, start_column=1, end_row=6, end_column=N)
+        c = ws.cell(row=6, column=1)
+        c.value     = 'DETALLE DE ERRORES Y DOCUMENTOS NO PROCESADOS'
+        c.font      = font_grp
+        c.fill      = PatternFill(start_color=COLOR_HDR, end_color=COLOR_HDR, fill_type='solid')
+        c.alignment = ac
+        c.border    = Border(left=side_med, right=side_med)
+        ws.row_dimensions[6].height = 25
+
+        # ── Fila 7: Encabezados de columna ────────────────────────────────────
+        for col_i, (_, titulo, ancho) in enumerate(COLUMNAS, 1):
+            c = ws.cell(row=7, column=col_i)
+            c.value     = titulo
+            c.font      = font_hdr
+            c.fill      = PatternFill(start_color=COLOR_HDR, end_color=COLOR_HDR, fill_type='solid')
+            c.alignment = ac
+            c.border    = borde
+            ws.column_dimensions[get_column_letter(col_i)].width = ancho
+        ws.row_dimensions[7].height = 35
+
+        # ── Filas 8+: Datos ───────────────────────────────────────────────────
+        FILA_DATOS = 8
+        for r_idx, fila in enumerate(filas):
+            excel_row = FILA_DATOS + r_idx
+            fill_par  = PatternFill(start_color=COLOR_PAR, end_color=COLOR_PAR, fill_type='solid') \
+                        if excel_row % 2 == 0 else None
+
+            for col_i, (key, titulo, ancho) in enumerate(COLUMNAS, 1):
+                c = ws.cell(row=excel_row, column=col_i)
+                c.value  = fila.get(key, '')
+                c.border = borde
+                if fill_par:
+                    c.fill = fill_par
+
+                if key == 'Numero':
+                    c.font, c.alignment = font_data,   ac
+                elif key == 'CUFE':
+                    c.font, c.alignment = font_cufe,   aw
+                elif key == 'Motivo':
+                    c.font, c.alignment = font_motivo, al
+                elif key == 'Intentos':
+                    c.font, c.alignment = font_data,   ac
+                elif key == 'Timestamp':
+                    c.font, c.alignment = font_data,   ac
+                else:
+                    c.font, c.alignment = font_data,   al
+
+        # ── Freeze + Auto-filtro ──────────────────────────────────────────────
+        ws.freeze_panes = 'A8'
+        ws.auto_filter.ref = f"A7:{get_column_letter(N)}{FILA_DATOS + len(filas) - 1}"
+
+        wb.save(nombre_archivo)
+        log(98, f"✅ Hoja 'No Procesados' generada: {len(filas)} registros", "OK")
+        return True
+
+    except Exception as e:
+        log(98, f"❌ Error generando hoja 'No Procesados': {e}", "ERROR")
+        return False
