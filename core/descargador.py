@@ -109,6 +109,30 @@ def guardar_mapping():
             print(f"Error guardando mapping: {e}")
 
 
+def _esperar(condicion, timeout: float = 3.0, intervalo: float = 0.05) -> bool:
+    """
+    Espera activa: evalúa condicion() repetidamente hasta que sea True
+    o se agote el timeout. Reemplaza time.sleep() fijo por espera inteligente.
+
+    Args:
+        condicion : callable sin argumentos que devuelve bool
+        timeout   : máximo de segundos a esperar (default 3s)
+        intervalo : segundos entre cada evaluación (default 50ms)
+
+    Returns:
+        True si la condición se cumplió, False si se agotó el timeout
+    """
+    fin = time.time() + timeout
+    while time.time() < fin:
+        try:
+            if condicion():
+                return True
+        except Exception:
+            pass
+        time.sleep(intervalo)
+    return False
+
+
 def generar_nombre_unico(cufe: str, nav_id: int) -> str:
     """Genera nombre único para el PDF"""
     timestamp_micro = int(time.time() * 1000000)
@@ -522,9 +546,11 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         log(nav_id, "⌨️ Ingresando...", "INFO")
         campo_cufe.clear()
-        time.sleep(0.5)
+        # Espera activa: hasta 1s para que el DOM refleje el campo vacío (~10-50ms real)
+        _esperar(lambda: not (campo_cufe.prop('value') or '').strip(), timeout=1.0)
         campo_cufe.input(cufe, clear=True)
-        time.sleep(1)
+        # Espera activa: hasta 3s para que el valor esté escrito en el campo (~50-150ms real)
+        _esperar(lambda: len(campo_cufe.prop('value') or '') > 10, timeout=3.0)
         
         bypass.intentar(timeout=10)
         time.sleep(1.5)
@@ -537,7 +563,10 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         log(nav_id, "🔍 Buscando...", "INFO")
         boton_buscar.click()
-        time.sleep(2)
+        # 0.5s mínimo necesario: el portal DIAN envía la búsqueda via XHR/fetch.
+        # No reducir a 0: bypass.intentar() que sigue debe ejecutarse DESPUÉS de que
+        # la petición haya salido, o podría no detectar un Cloudflare tardío.
+        time.sleep(0.5)
         
         bypass.intentar(timeout=10)
         time.sleep(1)
@@ -599,8 +628,10 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         
         boton_pdf.click()
         log(nav_id, "✓ Click OK", "OK")
-        time.sleep(1)
-        
+        # 0.2s mínimo: Chrome necesita procesar el click y abrir el stream de descarga
+        # antes de que el archivo aparezca en disco. detectar_pdf() ya hace polling c/0.5s.
+        time.sleep(0.2)
+
         ruta_pdf = detectar_pdf(cufe, nav_id, archivos_antes, carpeta_pdfs, timeout=20)
         
         if ruta_pdf:
