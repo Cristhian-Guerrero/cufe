@@ -37,6 +37,10 @@ _navegadores_en_uso = 0
 _max_navegadores = 10
 _lock_navegadores = threading.Lock()
 
+# Arranque escalonado: segundos de espera entre el inicio de cada navegador.
+# Evita que Cloudflare detecte múltiples conexiones simultáneas (crítico en Windows).
+ARRANQUE_INTERVALO_SEG = 3
+
 
 def configurar_callbacks(callback_progreso=None, callback_mensaje=None):
     global _callback_progreso, _callback_mensaje
@@ -336,9 +340,19 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     )
     threads.append(t_extractor)
     
-    for t in threads:
+    # El extractor arranca primero: ya escucha cola_pdfs mientras los navegadores se inicializan
+    threads[-1].start()
+
+    # Arranque escalonado de navegadores: uno cada ARRANQUE_INTERVALO_SEG segundos.
+    # Nav 1 arranca de inmediato; Nav N espera (N-1) * ARRANQUE_INTERVALO_SEG segundos.
+    # Previene que Cloudflare identifique el patrón de N conexiones simultáneas.
+    for idx, t in enumerate(threads[:-1]):
+        if idx > 0:
+            log(0, f"⏳ Navegador {idx + 1}/{NUM_NAVEGADORES}: "
+                   f"arrancando en {ARRANQUE_INTERVALO_SEG}s...", "INFO")
+            time.sleep(ARRANQUE_INTERVALO_SEG)
         t.start()
-    
+
     for t in threads[:-1]:
         t.join()
         
