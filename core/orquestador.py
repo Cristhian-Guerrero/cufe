@@ -181,6 +181,7 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
                             time.sleep(2)
                             page, bypass = inicializar_navegador(nav_id, carpeta_pdfs, dian_url)
                             if page is None: break
+                            bypass.reset()
                             fallos_consecutivos = 0
                     else:
                         resultado['estado'] = 'error'
