@@ -38,7 +38,8 @@ class Settings:
             'navegadores': {
                 'cantidad_paralela': 10,
                 'headless': False,
-                'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                'user_agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                'perfil_persistente': None  # None = auto (True en Windows, False en Linux)
             },
             'descarga': {
                 'max_reintentos': 2,
@@ -153,6 +154,11 @@ class Settings:
     def eliminar_duplicados(self):
         """Si True, elimina CUFEs duplicados antes de procesar"""
         return self._config['validaciones'].get('eliminar_duplicados', True)
+
+    @property
+    def perfil_persistente(self):
+        """None = auto según plataforma. True = forzar persistente. False = forzar temporal."""
+        return self._config['navegadores'].get('perfil_persistente', None)
     
     # ═══════════════════════════════════════════════════════════════════════
     # MÉTODOS DE UTILIDAD

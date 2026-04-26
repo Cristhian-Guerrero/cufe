@@ -12,9 +12,10 @@ import os
 import subprocess # Necesario para abrir el archivo en Linux
 from datetime import datetime
 from utils import log
+from config import cargar_settings
 from core.descargador import (
-    inicializar_navegador, 
-    descargar_cufe, 
+    inicializar_navegador,
+    descargar_cufe,
     cerrar_navegador,
     limpiar_navegadores,
     limpiar_carpetas_chrome,
@@ -295,7 +296,11 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     tiempo_inicio = time.time()
     
     configurar_callbacks(callback_progreso, callback_mensaje)
-    
+
+    from core.descargador import configurar_perfil_persistente
+    settings = cargar_settings()
+    configurar_perfil_persistente(settings.perfil_persistente)
+
     DIAN_URL = config['dian_url']
     CARPETA_PDFS = config['carpeta_pdfs']
     ARCHIVO_EXCEL = config['archivo_excel']

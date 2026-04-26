@@ -19,6 +19,7 @@ import threading
 import json
 import shutil
 import tempfile
+import platform
 from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from utils import log
@@ -32,6 +33,10 @@ ARCHIVO_MAPPING = "mapping_cufes_pdfs.json"
 
 # Carpeta base para datos de Chrome (configurable)
 _carpeta_chrome_base = None
+
+# Perfil persistente: None = auto (True en Windows, False en Linux).
+# Se puede sobreescribir con configurar_perfil_persistente() antes de inicializar.
+_perfil_persistente = None
 
 # === TELEMETRÍA ===
 _archivo_metricas = None
@@ -251,6 +256,47 @@ class CloudflareBypass:
         return False
 
 
+def configurar_perfil_persistente(valor: bool):
+    """Permite al caller forzar perfil persistente (True) o temporal (False).
+    Si no se llama, el comportamiento es automático: True en Windows, False en Linux.
+    """
+    global _perfil_persistente
+    _perfil_persistente = valor
+
+
+def _encontrar_navegador_windows() -> str:
+    """Busca Chrome o Edge instalado localmente en Windows (en orden de preferencia).
+
+    Returns:
+        Ruta al ejecutable encontrado, o None si no hay ninguno o no es Windows.
+    """
+    if platform.system() != 'Windows':
+        return None
+
+    localappdata = os.environ.get('LOCALAPPDATA', '')
+    rutas_candidatas = [
+        r'C:/Program Files/Google/Chrome/Application/chrome.exe',
+        r'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+        r'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+        r'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+        os.path.join(localappdata, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ]
+
+    for ruta in rutas_candidatas:
+        if ruta and os.path.isfile(ruta):
+            return ruta
+
+    return None
+
+
+def _obtener_carpeta_perfil_persistente(nav_id: int) -> str:
+    """Retorna la ruta del perfil persistente en Windows.
+    Cada nav_id tiene su propia subcarpeta para evitar conflictos entre instancias.
+    """
+    appdata = os.environ.get('APPDATA', os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'))
+    return os.path.join(appdata, 'CUFE_DIAN', 'browser_profile', f'nav_{nav_id}')
+
+
 def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headless: bool = False):
     """
     Inicializa navegador Chrome con configuración de descarga
@@ -265,13 +311,39 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headles
         tuple: (ChromiumPage, CloudflareBypass) o (None, None) si falla
     """
     log(nav_id, "🌐 Iniciando...", "INFO")
-    
+
     port = 9700 + (nav_id * 5)
-    user_data = obtener_carpeta_chrome(nav_id)
-    
+    _es_windows = platform.system() == 'Windows'
+
+    # ── Perfil del navegador ──────────────────────────────────────────────
+    # En Windows: perfil persistente por defecto (Cloudflare reconoce sesiones
+    # conocidas y reduce los desafíos en ejecuciones posteriores).
+    # En Linux: carpeta temporal (comportamiento original).
+    _usar_persistente = _perfil_persistente if _perfil_persistente is not None else _es_windows
+
+    if _usar_persistente and _es_windows:
+        user_data = _obtener_carpeta_perfil_persistente(nav_id)
+        os.makedirs(user_data, exist_ok=True)
+        log(nav_id, f"🗂️ Perfil persistente: ...nav_{nav_id}", "INFO")
+    else:
+        user_data = obtener_carpeta_chrome(nav_id)
+    # ─────────────────────────────────────────────────────────────────────
+
     co = ChromiumOptions()
     co.set_local_port(port)
     co.headless(headless)
+
+    # ── Navegador instalado en Windows ───────────────────────────────────
+    # El Chromium empaquetado por PyInstaller carece de historial y perfil real,
+    # lo que Cloudflare detecta como bot. Usar Chrome/Edge del sistema resuelve esto.
+    navegador_bin = _encontrar_navegador_windows()
+    if navegador_bin:
+        nombre_nav = 'Edge' if 'msedge' in navegador_bin.lower() else 'Chrome'
+        log(nav_id, f"✅ Usando {nombre_nav} del sistema", "INFO")
+        co.set_paths(browser_path=navegador_bin)
+    # Si no encuentra ninguno, DrissionPage usa su Chromium empaquetado (sin cambios)
+    # ─────────────────────────────────────────────────────────────────────
+
     co.set_argument('--no-sandbox')
     co.set_argument('--disable-dev-shm-usage')
     co.set_argument('--disable-gpu')
@@ -284,14 +356,14 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headles
     co.set_argument('--window-size=800,600')
     co.set_argument(f'--user-data-dir={user_data}')
     co.set_argument('--disable-blink-features=AutomationControlled')
-    
+
     # Posición fuera de pantalla
     co.set_argument('--window-position=-2000,-2000')
-    
+
     os.makedirs(carpeta_pdfs, exist_ok=True)
     ruta_absoluta = os.path.abspath(carpeta_pdfs)
     co.set_download_path(ruta_absoluta)
-    
+
     # Forzar descarga automática de PDFs
     co.set_pref('download.default_directory', ruta_absoluta)
     co.set_pref('download.prompt_for_download', False)
