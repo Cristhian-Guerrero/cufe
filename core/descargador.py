@@ -122,44 +122,108 @@ def generar_nombre_unico(cufe: str, nav_id: int) -> str:
 
 
 class CloudflareBypass:
-    """Bypass para verificación Cloudflare/Turnstile"""
-    
+    """Bypass para verificación Cloudflare/Turnstile con timeout adaptativo.
+
+    Estado interno por instancia (= por navegador):
+      _desafios_resueltos  : cuántos desafíos reales se han resuelto en la sesión
+      _llamadas_sin_desafio: llamadas consecutivas donde NO apareció iframe CF
+      _desafio_en_ultimo   : True si en la llamada anterior hubo iframe activo
+    """
+
+    # Umbrales del timeout adaptativo
+    _T_PRIMERA_LLAMADA   = 8   # sesión nueva, CF puede estar activo
+    _T_SESION_VALIDADA   = 2   # ya resolvió ≥1 desafío, pocas chances
+    _T_SESION_ESTABLECIDA = 1  # >5 llamadas consecutivas sin desafío
+    _T_REACTIVACION      = 6   # CF se activó de nuevo en llamada anterior
+
     def __init__(self, page, nav_id):
         self.page = page
         self.nav_id = nav_id
-    
+        self._desafios_resueltos   = 0
+        self._llamadas_sin_desafio = 0
+        self._desafio_en_ultimo    = False
+
+    def reset(self):
+        """Reinicia el estado adaptativo. Llamar cuando el navegador se reinicia."""
+        self._desafios_resueltos   = 0
+        self._llamadas_sin_desafio = 0
+        self._desafio_en_ultimo    = False
+        log(self.nav_id, "🔄 Bypass: estado reiniciado", "DEBUG")
+
+    def _timeout_adaptativo(self, timeout_caller: int) -> int:
+        """Calcula el timeout óptimo según el historial de la sesión.
+
+        Reglas (en orden de prioridad):
+          1. Si el caller pasa un timeout > al adaptativo → respetar el del caller
+          2. Si hubo desafío en la última llamada  → T_REACTIVACION
+          3. Si lleva >5 llamadas sin desafío       → T_SESION_ESTABLECIDA
+          4. Si ya resolvió ≥1 desafío antes        → T_SESION_VALIDADA
+          5. Primera llamada / estado base           → T_PRIMERA_LLAMADA
+        """
+        if self._desafio_en_ultimo:
+            adaptativo = self._T_REACTIVACION
+        elif self._llamadas_sin_desafio > 5:
+            adaptativo = self._T_SESION_ESTABLECIDA
+        elif self._desafios_resueltos >= 1:
+            adaptativo = self._T_SESION_VALIDADA
+        else:
+            adaptativo = self._T_PRIMERA_LLAMADA
+
+        # El caller puede forzar un timeout mayor; nunca reducirlo por debajo del adaptativo
+        resultado = max(adaptativo, timeout_caller) if timeout_caller > adaptativo else adaptativo
+        return resultado
+
     def intentar(self, timeout=8, max_intentos=2):
-        """Intenta resolver Cloudflare/Turnstile"""
+        """Intenta resolver Cloudflare/Turnstile.
+
+        El timeout efectivo se calcula adaptativamente: si la sesión ya está
+        validada se usa un timeout mucho menor, acelerando CUFEs posteriores.
+        Si el caller pasa un timeout mayor al adaptativo, se respeta el del caller.
+        Los timeouts internos (resolución del desafío) no cambian.
+        """
+        timeout_efectivo = self._timeout_adaptativo(timeout)
+
         for intento in range(max_intentos):
             try:
-                iframe = self.page.ele('css:iframe[src*="cloudflare"]', timeout=timeout)
+                iframe = self.page.ele('css:iframe[src*="cloudflare"]', timeout=timeout_efectivo)
                 if not iframe:
+                    # No hubo desafío: actualizar contadores
+                    self._llamadas_sin_desafio += 1
+                    self._desafio_en_ultimo = False
                     return True
-                
+
+                # Hay iframe activo: registrar que hubo desafío
+                self._desafio_en_ultimo = True
+                self._llamadas_sin_desafio = 0
+
                 body = iframe.ele('tag:body', timeout=3)
                 if not body or not body.shadow_root:
                     time.sleep(1)
                     continue
-                
+
                 checkbox = body.shadow_root.ele('tag:input', timeout=2)
                 if not checkbox:
                     time.sleep(1)
                     continue
-                
+
                 if checkbox.states.is_checked:
+                    self._desafios_resueltos += 1
+                    self._desafio_en_ultimo = False
                     return True
-                
+
                 checkbox.click()
                 time.sleep(4)
-                
+
                 if checkbox.states.is_checked:
+                    self._desafios_resueltos += 1
+                    self._desafio_en_ultimo = False
                     log(self.nav_id, "✓ Validado", "DEBUG")
                     return True
-                
+
             except:
                 if intento < max_intentos - 1:
                     time.sleep(2)
-        
+
         return False
 
 
