@@ -13,6 +13,7 @@ CAMBIOS v3.7.0:
 
 import time
 import os
+import csv
 import hashlib
 import threading
 import json
@@ -31,6 +32,10 @@ ARCHIVO_MAPPING = "mapping_cufes_pdfs.json"
 
 # Carpeta base para datos de Chrome (configurable)
 _carpeta_chrome_base = None
+
+# === TELEMETRÍA ===
+_archivo_metricas = None
+_lock_metricas = threading.Lock()
 
 
 def configurar_carpeta_chrome(carpeta_temp: str):
@@ -477,10 +482,50 @@ def detectar_pdf(cufe: str, nav_id: int, archivos_antes: set, carpeta_pdfs: str,
     return None
 
 
+def _inicializar_metricas() -> str:
+    """Crea el CSV de métricas al primer CUFE del proceso. Retorna la ruta."""
+    global _archivo_metricas
+    if _archivo_metricas is not None:
+        return _archivo_metricas
+    with _lock_metricas:
+        if _archivo_metricas is not None:   # double-check tras adquirir lock
+            return _archivo_metricas
+        os.makedirs('resultado', exist_ok=True)
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        ruta = os.path.join('resultado', f'metricas_{ts}.csv')
+        with open(ruta, 'w', newline='', encoding='utf-8') as f:
+            csv.writer(f).writerow([
+                'nav_id', 'cufe_num', 't_carga', 't_bypass',
+                't_input', 't_descarga', 't_total', 'estado', 'timestamp'
+            ])
+        _archivo_metricas = ruta
+        log(0, f"📊 Métricas en: {ruta}", "INFO")
+    return _archivo_metricas
+
+
+def _guardar_metrica(nav_id: int, cufe_num: int, t_carga: float, t_bypass: float,
+                     t_input: float, t_descarga: float, t_total: float,
+                     estado: str, timestamp: str):
+    """Añade una línea al CSV de métricas. Thread-safe."""
+    try:
+        archivo = _inicializar_metricas()
+        with _lock_metricas:
+            with open(archivo, 'a', newline='', encoding='utf-8') as f:
+                csv.writer(f).writerow([
+                    nav_id, cufe_num,
+                    f'{t_carga:.3f}', f'{t_bypass:.3f}',
+                    f'{t_input:.3f}', f'{t_descarga:.3f}',
+                    f'{t_total:.3f}', estado, timestamp
+                ])
+    except Exception as exc:
+        log(0, f"⚠️ Error guardando métrica: {exc}", "WARN")
+
+
 def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int,
                    carpeta_pdfs: str, intento: int = 1, max_reintentos: int = 2) -> dict:
     """
-    Descarga un CUFE específico
+    Descarga un CUFE específico.
+    Registra métricas de tiempo por etapa en resultado/metricas_YYYYMMDD_HHMMSS.csv
     """
     if intento > 1:
         log(nav_id, "="*50, "RETRY")
@@ -491,7 +536,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         log(nav_id, "="*50, "INFO")
         log(nav_id, f"📥 CUFE {numero}/{total}", "INFO")
         log(nav_id, "="*50, "INFO")
-    
+
     resultado = {
         'numero': numero,
         'cufe': cufe,
@@ -503,68 +548,101 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         'intento': intento,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
-    
+
+    # ── Marcadores de telemetría ──────────────────────────────────────────
+    _tm_inicio    = time.time()
+    _tm_carga_fin = 0.0   # se fija tras page.ele('#DocumentKey')
+    _tm_input_ini = 0.0   # se fija al empezar a escribir el CUFE
+    _tm_input_fin = 0.0   # se fija antes del loop de búsqueda de botón PDF
+    _tm_desc_ini  = 0.0   # se fija al entrar al loop del botón PDF
+    _tm_desc_fin  = 0.0   # se fija tras detectar_pdf()
+    _tm_bypass    = 0.0   # acumulado de todas las llamadas a bypass.intentar()
+    # ─────────────────────────────────────────────────────────────────────
+
     carpeta_abs = os.path.abspath(carpeta_pdfs)
     archivos_antes = set(os.listdir(carpeta_abs))
-    
+
     try:
         dian_url = "https://catalogo-vpfe.dian.gov.co/User/SearchDocument"
         if "SearchDocument" not in page.url:
             page.get(dian_url)
             time.sleep(2)
+            _t0 = time.time()
             bypass.intentar()
-        
+            _tm_bypass += time.time() - _t0
+
+        # ── fin etapa CARGA ───────────────────────────────────────────────
         campo_cufe = page.ele('#DocumentKey', timeout=8)
+        _tm_carga_fin = time.time()
+        # ─────────────────────────────────────────────────────────────────
+
         if not campo_cufe:
             resultado['mensaje'] = "Campo CUFE no encontrado"
             resultado['estado'] = 'retry'
             return resultado
-        
+
+        # ── inicio etapa INPUT ────────────────────────────────────────────
+        _tm_input_ini = time.time()
+
         log(nav_id, "⌨️ Ingresando...", "INFO")
         campo_cufe.clear()
         time.sleep(0.5)
         campo_cufe.input(cufe, clear=True)
         time.sleep(1)
-        
+
+        _t0 = time.time()
         bypass.intentar(timeout=10)
+        _tm_bypass += time.time() - _t0
+
         time.sleep(1.5)
-        
+
         boton_buscar = page.ele('css:button.search-document', timeout=8)
         if not boton_buscar:
+            _tm_input_fin = time.time()
             resultado['mensaje'] = "Botón búsqueda no encontrado"
             resultado['estado'] = 'retry'
             return resultado
-        
+
         log(nav_id, "🔍 Buscando...", "INFO")
         boton_buscar.click()
         time.sleep(2)
-        
+
+        _t0 = time.time()
         bypass.intentar(timeout=10)
+        _tm_bypass += time.time() - _t0
+
         time.sleep(1)
-        
+
         eventos_encontrados = extraer_eventos(page, nav_id)
         resultado['eventos'] = eventos_encontrados
-        
+
         # === DETECTAR TIPO DE DOCUMENTO DESDE HTML ===
         tipo_doc = detectar_tipo_documento(page, nav_id)
         resultado['tipo_documento'] = tipo_doc
-        
+
+        # ── fin etapa INPUT ───────────────────────────────────────────────
+        _tm_input_fin = time.time()
+        # ─────────────────────────────────────────────────────────────────
+
         log(nav_id, "🔎 Buscando PDF...", "INFO")
-        
+
+        # ── inicio etapa DESCARGA ─────────────────────────────────────────
+        _tm_desc_ini = time.time()
+
         # MEJORADO: Buscar botón PDF primero, con más tiempo
         # Solo declarar "no encontrado" si después de buscar no hay botón
         boton_pdf = None
         tiempo_busqueda = time.time()
         timeout_pdf = 35  # Tiempo suficiente para páginas lentas
         documento_no_encontrado = False
-        
+
         while not boton_pdf and (time.time() - tiempo_busqueda) < timeout_pdf:
             try:
                 # Verificar si apareció mensaje de "no encontrado"
                 if page.ele('text:Documento no encontrado', timeout=1):
                     documento_no_encontrado = True
                     break
-                
+
                 # Buscar botón de descarga
                 botones = page.eles('tag:a', timeout=2)
                 for boton in botones:
@@ -573,36 +651,45 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
                         boton_pdf = boton
                         log(nav_id, f"✓ Botón encontrado", "OK")
                         break
-                
+
                 if not boton_pdf:
                     time.sleep(2)
-                
+
             except:
                 time.sleep(2)
-        
+
         # Si se detectó "no encontrado" durante la búsqueda
         if documento_no_encontrado:
             log(nav_id, "⚠️ NO ENCONTRADO", "WARN")
             resultado['estado'] = 'no_encontrado'
             resultado['mensaje'] = "No existe en DIAN"
+            _tm_desc_fin = time.time()
             return resultado
-        
+
         if not boton_pdf:
             log(nav_id, "❌ Botón PDF no apareció", "ERROR")
             resultado['mensaje'] = "Timeout botón PDF"
             resultado['estado'] = 'retry'
+            _tm_desc_fin = time.time()
             return resultado
-        
+
         log(nav_id, "📥 Descargando...", "INFO")
+        _t0 = time.time()
         bypass.intentar(timeout=5)
+        _tm_bypass += time.time() - _t0
+
         time.sleep(1)
-        
+
         boton_pdf.click()
         log(nav_id, "✓ Click OK", "OK")
         time.sleep(1)
-        
+
         ruta_pdf = detectar_pdf(cufe, nav_id, archivos_antes, carpeta_pdfs, timeout=20)
-        
+
+        # ── fin etapa DESCARGA ────────────────────────────────────────────
+        _tm_desc_fin = time.time()
+        # ─────────────────────────────────────────────────────────────────
+
         if ruta_pdf:
             log(nav_id, "✅ EXITOSO", "OK")
             resultado['estado'] = 'exitoso'
@@ -613,12 +700,27 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
             log(nav_id, "❌ PDF no detectado", "ERROR")
             resultado['mensaje'] = "Timeout PDF"
             resultado['estado'] = 'retry'
-        
+
     except Exception as e:
         log(nav_id, f"❌ Error: {str(e)[:50]}", "ERROR")
         resultado['mensaje'] = f"Error: {str(e)[:80]}"
         resultado['estado'] = 'retry'
-    
+
+    finally:
+        # Siempre se ejecuta: en returns normales, returns anticipados y excepciones
+        _tm_fin = time.time()
+        _guardar_metrica(
+            nav_id=nav_id,
+            cufe_num=numero,
+            t_carga=(_tm_carga_fin - _tm_inicio) if _tm_carga_fin else (_tm_fin - _tm_inicio),
+            t_bypass=_tm_bypass,
+            t_input=(_tm_input_fin - _tm_input_ini) if (_tm_input_fin and _tm_input_ini) else 0.0,
+            t_descarga=(_tm_desc_fin - _tm_desc_ini) if (_tm_desc_fin and _tm_desc_ini) else 0.0,
+            t_total=_tm_fin - _tm_inicio,
+            estado=resultado['estado'],
+            timestamp=resultado['timestamp']
+        )
+
     return resultado
 
 
