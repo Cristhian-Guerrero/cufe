@@ -1,5 +1,5 @@
 """
-Sistema de Consulta CUFE DIAN - v4.5.0
+Sistema de Consulta CUFE DIAN - v4.9.1
 Diseño Limpio y Moderno
 © C. Guerrero | A.S. Contadores & Asesores SAS
 """
@@ -32,7 +32,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '4.9.0',
+    'version': '4.9.1',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
@@ -107,7 +107,7 @@ class App(tk.Tk):
         self.title(APP['title'])
         self.geometry(f"{APP['width']}x{APP['height']}")
         self.minsize(APP['width'], APP['height'])
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.configure(bg=C['bg'])
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
