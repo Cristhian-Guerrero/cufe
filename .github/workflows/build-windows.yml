@@ -34,7 +34,8 @@ jobs:
           
           # Actualizar pip
           python -m pip install --upgrade pip setuptools wheel
-          
+          pip install "numpy==1.26.4"
+
           # Instalar dependencias
           pip install DrissionPage>=4.0.0
           pip install pdfplumber>=0.10.0
