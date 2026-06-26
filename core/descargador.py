@@ -1,8 +1,14 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 DESCARGADOR - CUFE DIAN AUTOMATION
-v3.7.0 - Optimizado: Carpetas temp del sistema, cierre inmediato en error
+v3.7.1 - Fix: limpiar locks huérfanos y puerto antes de lanzar Chrome
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v3.7.1:
+1. _limpiar_locks_perfil(): elimina SingletonLock/Socket/Cookie huérfanos
+   antes de lanzar Chrome (fix crash silencioso cuando Chrome no cerró bien)
+2. _liberar_puerto_chrome(): mata procesos Chrome/Edge zombi en el puerto
+   de debug (fix 32/32 errores cuando había una sesión CUFES previa activa)
 
 CAMBIOS v3.7.0:
 1. Carpetas Chrome en carpeta temporal configurable (no en cwd)
@@ -297,6 +303,50 @@ def _obtener_carpeta_perfil_persistente(nav_id: int) -> str:
     return os.path.join(appdata, 'CUFE_DIAN', 'browser_profile', f'nav_{nav_id}')
 
 
+def _limpiar_locks_perfil(user_data: str, nav_id: int):
+    """Elimina archivos Singleton huérfanos del perfil Chrome antes de lanzar.
+    Solo borra archivos de coordinación de proceso — nunca cookies ni datos de sesión.
+    """
+    for nombre in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
+        ruta = os.path.join(user_data, nombre)
+        try:
+            if os.path.exists(ruta):
+                os.remove(ruta)
+                log(nav_id, f"🔓 {nombre} limpiado", "DEBUG")
+        except Exception:
+            pass
+
+
+def _liberar_puerto_chrome(port: int, nav_id: int):
+    """Mata procesos Chrome/Edge zombi escuchando en el puerto de debug CDP.
+    Solo actúa en Windows y solo si el proceso es chrome.exe o msedge.exe.
+    """
+    if platform.system() != 'Windows':
+        return
+    try:
+        import subprocess
+        r = subprocess.run(
+            ['netstat', '-ano'],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in r.stdout.splitlines():
+            if f':{port}' in line and 'LISTENING' in line:
+                pid = line.strip().split()[-1]
+                r2 = subprocess.run(
+                    ['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV', '/NH'],
+                    capture_output=True, text=True, timeout=5
+                )
+                proc = r2.stdout.lower()
+                if 'chrome' in proc or 'msedge' in proc:
+                    subprocess.run(['taskkill', '/F', '/PID', pid],
+                                   capture_output=True, timeout=5)
+                    log(nav_id, f"⚠️ Chrome zombi PID {pid} en :{port} liberado", "WARN")
+                    time.sleep(1)
+                break
+    except Exception:
+        pass
+
+
 def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headless: bool = False):
     """
     Inicializa navegador Chrome con configuración de descarga
@@ -359,6 +409,10 @@ def inicializar_navegador(nav_id: int, carpeta_pdfs: str, dian_url: str, headles
 
     # Posición fuera de pantalla
     co.set_argument('--window-position=-2000,-2000')
+
+    # Fix v3.7.1: limpiar locks huérfanos y puerto antes de lanzar
+    _limpiar_locks_perfil(user_data, nav_id)
+    _liberar_puerto_chrome(port, nav_id)
 
     os.makedirs(carpeta_pdfs, exist_ok=True)
     ruta_absoluta = os.path.abspath(carpeta_pdfs)
