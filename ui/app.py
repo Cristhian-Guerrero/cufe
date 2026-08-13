@@ -1,5 +1,5 @@
 """
-Sistema de Consulta CUFE DIAN - v5.0.0
+Sistema de Consulta CUFE DIAN - v5.1.0
 Diseño Limpio y Moderno
 © C. Guerrero | A.S. Contadores & Asesores SAS
 """
@@ -32,7 +32,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '5.0.0',
+    'version': '5.1.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
@@ -118,7 +118,6 @@ class App(tk.Tk):
         self.processing = False
         self.stop_requested = False
         self.archivo_var = tk.StringVar(value="")
-        self.carpeta_var = tk.StringVar(value=os.path.expanduser("~"))
         self.conservar_duplicados = tk.BooleanVar(value=False)
         self.cufes_validos = []
         self.cufes_invalidos = []
@@ -179,6 +178,29 @@ class App(tk.Tk):
                 except: pass
         return None
     
+    def _get_base_path(self):
+        """Directorio base: junto al .exe en producción, raíz del proyecto en desarrollo."""
+        if getattr(sys, 'frozen', False):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _get_resultados_path(self):
+        return os.path.join(self._get_base_path(), "Resultados_CUFE")
+
+    def _abrir_carpeta_resultados(self):
+        ruta = self._get_resultados_path()
+        os.makedirs(ruta, exist_ok=True)
+        try:
+            import platform, subprocess
+            if platform.system() == 'Windows':
+                os.startfile(ruta)
+            elif platform.system() == 'Darwin':
+                subprocess.run(['open', ruta])
+            else:
+                subprocess.run(['xdg-open', ruta])
+        except Exception as e:
+            self.log(f"Error al abrir carpeta: {e}", "error")
+
     def build_ui(self):
         # === HEADER con logo centrado ===
         header = tk.Frame(self, bg=C['card'], height=90)
@@ -222,17 +244,19 @@ class App(tk.Tk):
         
         # Separador
         tk.Frame(inner, bg=C['border'], width=1).pack(side=tk.LEFT, fill=tk.Y, padx=10)
-        
-        # Destino
+
+        # Carpeta de salida automática (solo lectura)
         tk.Label(inner, text="📁", font=('Segoe UI', 11), bg=C['card']).pack(side=tk.LEFT)
-        self.lbl_destino = tk.Label(inner, text="Carpeta de salida", font=('Segoe UI', 9),
-                                   fg=C['text_soft'], bg=C['card'])
+        ruta = self._get_resultados_path()
+        texto_ruta = ruta if len(ruta) <= 42 else "..." + ruta[-39:]
+        self.lbl_destino = tk.Label(inner, text=texto_ruta, font=('Segoe UI', 8),
+                                   fg=C['text_muted'], bg=C['card'])
         self.lbl_destino.pack(side=tk.LEFT, padx=(5, 10))
-        
-        self.btn_destino = tk.Button(inner, text="Cambiar", font=('Segoe UI', 9),
-                                    bg=C['border'], fg=C['text'], relief='flat', cursor='hand2',
-                                    command=self.seleccionar_carpeta, padx=10, pady=4)
-        self.btn_destino.pack(side=tk.LEFT)
+
+        self.btn_abrir_carpeta = tk.Button(inner, text="Abrir carpeta", font=('Segoe UI', 9),
+                                          bg=C['border'], fg=C['text'], relief='flat', cursor='hand2',
+                                          command=self._abrir_carpeta_resultados, padx=10, pady=4)
+        self.btn_abrir_carpeta.pack(side=tk.LEFT)
         
         # --- Validación y botones ---
         ctrl_frame = tk.Frame(main, bg=C['bg'])
@@ -412,12 +436,6 @@ class App(tk.Tk):
             self.lbl_archivo.config(text=nombre if len(nombre) < 50 else nombre[:47]+"...", fg=C['text'])
             self.validar_archivo(f)
     
-    def seleccionar_carpeta(self):
-        d = filedialog.askdirectory(initialdir=self.carpeta_var.get())
-        if d:
-            self.carpeta_var.set(d)
-            self.log(f"Destino: {os.path.basename(d)}", "info")
-    
     def validar_archivo(self, path):
         self.log(f"Cargando: {os.path.basename(path)}", "info")
         try:
@@ -555,22 +573,24 @@ class App(tk.Tk):
                 return
             
             settings = cargar_settings()
-            carpeta = self.carpeta_var.get()
-            
-            # Temporal oculta
-            temp = os.path.join(carpeta, ".cufe_temp")
+
+            # Rutas automáticas junto al .exe / raíz del proyecto
+            resultados_dir = self._get_resultados_path()
+            pdfs = os.path.join(resultados_dir, "Facturas_PDF")
+            excel_dir = os.path.join(resultados_dir, "Reportes_Excel")
+            temp = os.path.join(resultados_dir, ".cufe_temp")
+
+            os.makedirs(pdfs, exist_ok=True)
+            os.makedirs(excel_dir, exist_ok=True)
             os.makedirs(temp, exist_ok=True)
             try:
                 import platform, subprocess
                 if platform.system() == "Windows":
                     subprocess.run(['attrib', '+h', temp], capture_output=True)
             except: pass
-            
-            pdfs = os.path.join(carpeta, "Facturas_PDF")
-            os.makedirs(pdfs, exist_ok=True)
-            
+
             ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-            excel = os.path.join(carpeta, f"Reporte_{ts}.xlsx")
+            excel = os.path.join(excel_dir, f"Reporte_{ts}.xlsx")
             
             cfg = {
                 'dian_url': settings.dian_url,

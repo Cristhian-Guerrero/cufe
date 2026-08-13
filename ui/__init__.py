@@ -2,7 +2,7 @@
 Módulo de Interfaz Gráfica - Sistema CUFE DIAN
 """
 
-from .app import ConsultaCUFEApp, main
+from .app import App
 
-__all__ = ['ConsultaCUFEApp', 'main']
-__version__ = '4.0.0'
+__all__ = ['App']
+__version__ = '5.1.0'
