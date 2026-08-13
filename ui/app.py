@@ -1,5 +1,5 @@
 """
-Sistema de Consulta CUFE DIAN - v4.9.1
+Sistema de Consulta CUFE DIAN - v5.0.0
 Diseño Limpio y Moderno
 © C. Guerrero | A.S. Contadores & Asesores SAS
 """
@@ -32,12 +32,14 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '4.9.1',
+    'version': '5.0.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
     'width': 920,
     'height': 750,
+    # Número de navegadores: se lee de config/config.json → navegadores.cantidad_paralela
+    # Cambiar ese valor para subir o bajar el paralelismo (más = más rápido pero más riesgo anti-robot)
     'max_nav': 10,
 }
 
@@ -58,21 +60,21 @@ C = {
 }
 
 
-def _separar_duplicados(cufes):
+def _separar_duplicados(pares):
     """
-    Separa únicos y construye mapa de expansión.
-    Retorna (cufes_unicos, mapa_expansion).
-    mapa_expansion[i] = índice en cufes_unicos al que corresponde cufes[i].
+    Separa pares únicos (cufe, nit) y construye mapa de expansión.
+    La clave de deduplicación es solo el CUFE (el NIT debe ser consistente).
     """
     vistos = {}
-    cufes_unicos = []
+    unicos = []
     mapa_expansion = []
-    for cufe in cufes:
+    for par in pares:
+        cufe = par[0]
         if cufe not in vistos:
-            vistos[cufe] = len(cufes_unicos)
-            cufes_unicos.append(cufe)
+            vistos[cufe] = len(unicos)
+            unicos.append(par)
         mapa_expansion.append(vistos[cufe])
-    return cufes_unicos, mapa_expansion
+    return unicos, mapa_expansion
 
 
 def _expandir_datos(cufes_original, mapa_expansion, datos_procesados):
@@ -90,7 +92,8 @@ def _expandir_datos(cufes_original, mapa_expansion, datos_procesados):
             por_cufe[cufe] = d
 
     resultado = []
-    for nuevo_num, cufe in enumerate(cufes_original, 1):
+    for nuevo_num, par in enumerate(cufes_original, 1):
+        cufe = par[0] if isinstance(par, tuple) else par
         original = por_cufe.get(cufe)
         if original:
             fila = copy.deepcopy(original)
@@ -418,43 +421,66 @@ class App(tk.Tk):
     def validar_archivo(self, path):
         self.log(f"Cargando: {os.path.basename(path)}", "info")
         try:
-            cufes = []
+            pares = []  # lista de (cufe, nit)
             ext = os.path.splitext(path)[1].lower()
             if ext == '.xlsx':
                 import pandas as pd
                 df = pd.read_excel(path, header=None)
-                for col in df.columns:
-                    for v in df[col].dropna():
-                        t = str(v).strip()
-                        if len(t) >= 90:
-                            cufes.append(t)
+                primera_fila = True
+                for _, fila in df.iterrows():
+                    cufe_val = str(fila.iloc[0]).strip() if len(fila) > 0 else ''
+                    nit_val  = str(fila.iloc[1]).strip() if len(fila) > 1 else ''
+                    # Ignorar fila de encabezado
+                    if primera_fila and cufe_val.upper() in ('CUFE', 'CUFES', 'CÓDIGO', 'CODIGO'):
+                        primera_fila = False
+                        continue
+                    primera_fila = False
+                    if nit_val in ('nan', 'None', ''):
+                        nit_val = ''
+                    if len(cufe_val) >= 90:
+                        pares.append((cufe_val, nit_val))
             else:
                 with open(path, 'r', encoding='utf-8') as f:
-                    cufes = [l.strip() for l in f if l.strip()]
-            self._validar_cufes(cufes)
+                    for linea in f:
+                        linea = linea.strip()
+                        if not linea:
+                            continue
+                        if '\t' in linea:
+                            partes = linea.split('\t', 1)
+                        elif ',' in linea:
+                            partes = linea.split(',', 1)
+                        else:
+                            partes = [linea]
+                        cufe_val = partes[0].strip()
+                        nit_val  = partes[1].strip() if len(partes) > 1 else ''
+                        pares.append((cufe_val, nit_val))
+            self._validar_cufes(pares)
         except Exception as e:
             self.log(f"Error: {e}", "error")
     
-    def _validar_cufes(self, cufes):
+    def _validar_cufes(self, pares):
+        """pares: lista de (cufe, nit)"""
         import re
-        self.cufes_validos = []
-        self.cufes_invalidos = []
+        self.cufes_validos = []   # lista de (cufe, nit) listos para procesar
+        self.cufes_invalidos = [] # lista de strings (cufe) inválidos
         seen = set()
         self.duplicados = 0
         conservar = self.conservar_duplicados.get()
 
         pat = re.compile(r'^[a-fA-F0-9]{96}$')
-        for c in cufes:
-            c = c.strip()
-            if not pat.match(c):
-                self.cufes_invalidos.append(c)
-            elif c in seen:
+        for cufe, nit in pares:
+            if not pat.match(cufe):
+                self.cufes_invalidos.append(cufe)
+            elif not nit:
+                self.cufes_invalidos.append(cufe)
+                self.log(f"⚠ CUFE sin NIT — se excluye: {cufe[:20]}...", "warning")
+            elif cufe in seen:
                 self.duplicados += 1
                 if conservar:
-                    self.cufes_validos.append(c)
+                    self.cufes_validos.append((cufe, nit))
             else:
-                seen.add(c)
-                self.cufes_validos.append(c)
+                seen.add(cufe)
+                self.cufes_validos.append((cufe, nit))
 
         n_ok = len(self.cufes_validos)
         n_bad = len(self.cufes_invalidos)
@@ -472,10 +498,10 @@ class App(tk.Tk):
             elif self.duplicados > 0:
                 self.log(f"✓ {n_ok} CUFEs válidos ({self.duplicados} duplicados eliminados)", "success")
             else:
-                self.log(f"✓ {n_ok} CUFEs válidos", "success")
+                self.log(f"✓ {n_ok} CUFEs válidos con NIT", "success")
         else:
             self.btn_start.config(state=tk.DISABLED, bg=C['border'], fg=C['text_soft'])
-            self.log("No hay CUFEs válidos", "warning")
+            self.log("No hay CUFEs válidos con NIT", "warning")
 
     def _on_toggle_duplicados(self):
         """Alterna la opción de conservar duplicados y re-valida"""
@@ -550,7 +576,7 @@ class App(tk.Tk):
                 'dian_url': settings.dian_url,
                 'carpeta_pdfs': pdfs,
                 'archivo_excel': excel,
-                'num_navegadores': min(len(self.cufes_validos), APP['max_nav']),
+                'num_navegadores': settings.num_navegadores,  # config.json → navegadores.cantidad_paralela
                 'max_reintentos': settings.max_reintentos,
                 'carpeta_temp': temp,
             }
@@ -568,8 +594,6 @@ class App(tk.Tk):
 
             if hay_duplicados:
                 self.log(f"ℹ {len(self.cufes_validos) - len(cufes_unicos)} duplicados se reutilizarán sin re-descargar", "info")
-
-            cfg['num_navegadores'] = min(len(cufes_unicos), APP['max_nav'])
 
             res = ejecutar_sistema(cufes_unicos, cfg,
                                   callback_progreso=cb_prog,
@@ -592,20 +616,23 @@ class App(tk.Tk):
                 from core.excel_generator import agregar_hoja_no_procesados
                 errores_hoja = [x for x in res['resultados']
                                 if x['estado'] in ('error', 'no_encontrado')]
-                invalidos_fmt = [{'cufe': c, 'razon': 'Formato de CUFE inválido', 'linea': None}
+                invalidos_fmt = [{'cufe': c, 'razon': 'Formato CUFE inválido o sin NIT', 'linea': None}
                                  for c in self.cufes_invalidos]
                 agregar_hoja_no_procesados(excel, errores_hoja, invalidos_fmt)
 
                 r = res['resultados']
-                ok       = len([x for x in r if x['estado'] == 'exitoso'])
-                no_enc   = len([x for x in r if x['estado'] == 'no_encontrado'])
-                err      = len([x for x in r if x['estado'] == 'error'])
+                ok        = len([x for x in r if x['estado'] == 'exitoso'])
+                no_enc    = len([x for x in r if x['estado'] == 'no_encontrado'])
+                bloqueado = len([x for x in r if 'anti-robot' in x.get('mensaje', '')])
+                err       = len([x for x in r if x['estado'] == 'error'])
                 dur = res['duracion']
 
                 self.log("─" * 35, "info")
                 self.log(f"✓ Exitosos: {ok}", "success")
                 if no_enc:
                     self.log(f"⚠ No encontrados en DIAN: {no_enc}", "warning")
+                if bloqueado:
+                    self.log(f"🚫 Bloqueados anti-robot: {bloqueado} — reintentar manualmente", "warning")
                 if err:
                     self.log(f"✗ Errores: {err}", "error")
                 self.log(f"⏱ Tiempo: {dur:.1f}s", "info")

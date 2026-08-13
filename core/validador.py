@@ -1,8 +1,10 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-VALIDADOR DE CUFES - CUFE DIAN AUTOMATION v3.1.0
+VALIDADOR DE CUFES - CUFE DIAN AUTOMATION v3.2.0
 Valida formato, elimina duplicados y detecta CUFEs inválidos
-NUEVO: Soporte para archivos .txt y .xlsx
+Soporta NIT asociado: columna B en Excel, o "CUFE,NIT" / "CUFE\tNIT" en .txt
+Retorna List[Tuple[str, str]] = [(cufe, nit), ...]
+CUFEs sin NIT se reportan como inválidos con razón 'sin_nit'
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -96,143 +98,136 @@ class ValidadorCUFE:
         
         return True, ""
     
-    def _leer_archivo_txt(self, ruta_archivo: str) -> Tuple[List[str], str]:
+    def _leer_archivo_txt(self, ruta_archivo: str) -> Tuple[List[Tuple[str, str]], str]:
         """
-        Lee CUFEs desde archivo .txt (un CUFE por línea)
-        
-        Args:
-            ruta_archivo: Ruta del archivo .txt
-            
-        Returns:
-            (lista_lineas, mensaje_error)
+        Lee pares (CUFE, NIT) desde archivo .txt.
+
+        Formatos soportados (un par por línea):
+          - "CUFE,NIT"    separado por coma
+          - "CUFE\tNIT"   separado por tabulador
+          - "CUFE"        sin NIT (se registra como sin_nit)
         """
         try:
             with open(ruta_archivo, 'r', encoding='utf-8') as f:
                 lineas = [l.strip() for l in f if l.strip()]
-            
+
             if not lineas:
                 return [], "❌ Archivo vacío"
-            
-            log(0, f"📄 Leídas {len(lineas)} líneas desde archivo .txt", "INFO")
-            return lineas, ""
-            
+
+            pares = []
+            for linea in lineas:
+                if '\t' in linea:
+                    partes = linea.split('\t', 1)
+                elif ',' in linea:
+                    partes = linea.split(',', 1)
+                else:
+                    partes = [linea]
+
+                cufe = partes[0].strip()
+                nit  = partes[1].strip() if len(partes) > 1 else ''
+                pares.append((cufe, nit))
+
+            log(0, f"📄 Leídas {len(pares)} líneas desde archivo .txt", "INFO")
+            return pares, ""
+
         except Exception as e:
             return [], f"❌ Error leyendo archivo .txt: {str(e)}"
     
-    def _leer_archivo_excel(self, ruta_archivo: str) -> Tuple[List[str], str]:
+    def _leer_archivo_excel(self, ruta_archivo: str) -> Tuple[List[Tuple[str, str]], str]:
         """
-        Lee CUFEs desde archivo .xlsx (columna A)
-        
+        Lee pares (CUFE, NIT) desde archivo .xlsx.
+
         Formato esperado:
-        ┌─────────────────────────────┐
-        │ A (CUFE)                    │
-        ├─────────────────────────────┤
-        │ CUFE                        │  <- Fila de encabezado (opcional)
-        │ 8d528789cb2547d0...         │
-        │ c64601b7a5b65b68...         │
-        └─────────────────────────────┘
-        
-        Args:
-            ruta_archivo: Ruta del archivo .xlsx
-            
-        Returns:
-            (lista_cufes, mensaje_error)
+        ┌─────────────────────────────┬───────────┐
+        │ A (CUFE)                    │ B (NIT)   │
+        ├─────────────────────────────┼───────────┤
+        │ CUFE                        │ NIT       │  <- Encabezado (opcional)
+        │ 8d528789cb2547d0...         │ 900123456 │
+        └─────────────────────────────┴───────────┘
+        NIT en col B es opcional; si falta se reporta como sin_nit.
         """
         if not EXCEL_DISPONIBLE:
             return [], "❌ openpyxl no disponible"
-        
+
         try:
-            # Cargar archivo Excel
             wb = load_workbook(ruta_archivo, read_only=True, data_only=True)
-            
-            # Usar la primera hoja
             ws = wb.active
             log(0, f"📊 Leyendo Excel: hoja '{ws.title}'", "INFO")
-            
-            # Leer columna A
-            cufes_raw = []
+
+            pares = []
             primera_fila = True
-            
-            for row_idx, row in enumerate(ws.iter_rows(min_col=1, max_col=1, values_only=True), 1):
-                valor = row[0]
-                
-                # Saltar si es None o vacío
-                if valor is None:
+
+            for row in ws.iter_rows(min_col=1, max_col=2, values_only=True):
+                val_cufe = row[0]
+                val_nit  = row[1] if len(row) > 1 else None
+
+                if val_cufe is None:
                     continue
-                
-                valor_str = str(valor).strip()
-                
-                if not valor_str:
+
+                cufe_str = str(val_cufe).strip()
+                if not cufe_str:
                     continue
-                
-                # Detectar encabezado (primera fila)
+
+                # Detectar fila de encabezado
                 if primera_fila:
                     primera_fila = False
-                    
-                    # Si la primera celda es "CUFE" o similar, es encabezado
-                    if valor_str.upper() in ['CUFE', 'CUFES', 'CÓDIGO', 'CODIGO']:
-                        log(0, f"  ✓ Detectado encabezado en fila 1: '{valor_str}'", "INFO")
+                    if cufe_str.upper() in ['CUFE', 'CUFES', 'CÓDIGO', 'CODIGO']:
+                        log(0, f"  ✓ Encabezado detectado en fila 1", "INFO")
                         continue
-                
-                cufes_raw.append(valor_str)
-            
+
+                nit_str = str(val_nit).strip() if val_nit is not None else ''
+                pares.append((cufe_str, nit_str))
+
             wb.close()
-            
-            if not cufes_raw:
+
+            if not pares:
                 return [], "❌ No se encontraron CUFEs en columna A"
-            
-            log(0, f"📄 Leídos {len(cufes_raw)} valores desde Excel (columna A)", "INFO")
-            return cufes_raw, ""
-            
+
+            log(0, f"📄 Leídos {len(pares)} pares CUFE/NIT desde Excel", "INFO")
+            return pares, ""
+
         except Exception as e:
             return [], f"❌ Error leyendo archivo Excel: {str(e)}"
     
-    def cargar_y_validar(self, ruta_archivo: str, eliminar_duplicados: bool = True) -> Tuple[List[str], Dict[str, any]]:
+    def cargar_y_validar(self, ruta_archivo: str, eliminar_duplicados: bool = True) -> Tuple[List[Tuple[str, str]], Dict[str, any]]:
         """
-        Carga y valida CUFEs desde archivo (.txt o .xlsx)
-        
-        Args:
-            ruta_archivo: Ruta del archivo de entrada
-            
+        Carga y valida pares (CUFE, NIT) desde archivo (.txt o .xlsx).
+
         Returns:
-            (lista_cufes_validos, estadisticas)
+            (lista_pares_validos, estadisticas)
+            donde cada par es (cufe: str, nit: str)
         """
-        # Validar archivo
         existe, error = self.validar_archivo(ruta_archivo)
         if not existe:
             log(0, error, "ERROR")
             return [], {'error': error}
-        
-        # Detectar extensión y leer archivo
+
         extension = os.path.splitext(ruta_archivo)[1].lower()
-        
+
         if extension == '.txt':
-            lineas, error = self._leer_archivo_txt(ruta_archivo)
+            pares, error = self._leer_archivo_txt(ruta_archivo)
         elif extension == '.xlsx':
-            lineas, error = self._leer_archivo_excel(ruta_archivo)
+            pares, error = self._leer_archivo_excel(ruta_archivo)
         else:
             error = f"❌ Extensión no soportada: {extension}"
             log(0, error, "ERROR")
             return [], {'error': error}
-        
-        # Verificar si hubo error en la lectura
+
         if error:
             log(0, error, "ERROR")
             return [], {'error': error}
-        
-        if not lineas:
+
+        if not pares:
             error = "❌ No se encontraron datos"
             log(0, error, "ERROR")
             return [], {'error': error}
-        
-        # Validar cada CUFE
+
         cufes_vistos = set()
         self.cufes_validos = []
         self.cufes_invalidos = []
         self.duplicados_eliminados = 0
 
-        for idx, cufe in enumerate(lineas, 1):
-            # Verificar duplicados
+        for idx, (cufe, nit) in enumerate(pares, 1):
             if cufe in cufes_vistos:
                 self.duplicados_eliminados += 1
                 if eliminar_duplicados:
@@ -241,32 +236,30 @@ class ValidadorCUFE:
                 else:
                     log(0, f"ℹ️  CUFE #{idx} duplicado (conservado)", "INFO")
 
-            # Validar formato
             es_valido, razon = self.es_cufe_valido(cufe)
 
-            if es_valido:
-                self.cufes_validos.append(cufe)
-                cufes_vistos.add(cufe)
-            else:
-                self.cufes_invalidos.append({
-                    'linea': idx,
-                    'cufe': cufe,
-                    'razon': razon
-                })
+            if not es_valido:
+                self.cufes_invalidos.append({'linea': idx, 'cufe': cufe, 'razon': razon})
                 log(0, f"⚠️  CUFE #{idx} inválido: {razon}", "WARN")
-        
-        # Estadísticas
+                continue
+
+            if not nit:
+                self.cufes_invalidos.append({'linea': idx, 'cufe': cufe, 'razon': 'sin_nit'})
+                log(0, f"⚠️  CUFE #{idx} sin NIT — no se puede procesar", "WARN")
+                continue
+
+            self.cufes_validos.append((cufe, nit))
+            cufes_vistos.add(cufe)
+
         stats = {
-            'total_lineas': len(lineas),
+            'total_lineas': len(pares),
             'validos': len(self.cufes_validos),
             'invalidos': len(self.cufes_invalidos),
             'duplicados': self.duplicados_eliminados,
             'formato': extension
         }
-        
-        # Mostrar resumen
+
         self._mostrar_resumen(stats)
-        
         return self.cufes_validos, stats
     
     def _mostrar_resumen(self, stats: Dict):
@@ -306,32 +299,28 @@ class ValidadorCUFE:
 # FUNCIÓN DE CONVENIENCIA (compatibilidad con código original)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def cargar_cufes(ruta_archivo: str, eliminar_duplicados: bool = True, invalidos_out: list = None) -> List[str]:
+def cargar_cufes(ruta_archivo: str, eliminar_duplicados: bool = True, invalidos_out: list = None) -> List[Tuple[str, str]]:
     """
-    Función wrapper para mantener compatibilidad con código original
-
-    Soporta archivos .txt y .xlsx automáticamente
+    Carga y valida pares (CUFE, NIT) desde archivo .txt o .xlsx.
 
     Args:
-        ruta_archivo: Ruta del archivo de CUFEs (.txt o .xlsx)
-        eliminar_duplicados: Si False, conserva CUFEs repetidos en el resultado
-        invalidos_out: Lista opcional; si se provee, se rellena con los CUFEs inválidos
-                       encontrados (dicts con claves 'cufe', 'razon', 'linea')
+        ruta_archivo: Ruta del archivo (.txt o .xlsx)
+        eliminar_duplicados: Si False, conserva duplicados
+        invalidos_out: Lista opcional; se rellena con dicts {'cufe', 'razon', 'linea'}
 
     Returns:
-        Lista de CUFEs válidos
+        Lista de tuplas [(cufe, nit), ...] listas para procesar
     """
     validador = ValidadorCUFE()
-    cufes, stats = validador.cargar_y_validar(ruta_archivo, eliminar_duplicados=eliminar_duplicados)
+    pares, stats = validador.cargar_y_validar(ruta_archivo, eliminar_duplicados=eliminar_duplicados)
 
     if invalidos_out is not None:
         invalidos_out.extend(validador.cufes_invalidos)
 
-    # Si hay errores críticos, retornar lista vacía
     if stats.get('error') or stats.get('validos', 0) == 0:
         return []
 
-    return cufes
+    return pares
 
 
 # ═══════════════════════════════════════════════════════════════════════════

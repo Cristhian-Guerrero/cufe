@@ -75,20 +75,21 @@ def guardar_progreso_parcial(datos_completos, resultados):
 atexit.register(limpiar_al_salir)
 
 
-def _separar_duplicados(cufes):
-    """Separa únicos y construye mapa de expansión."""
+def _separar_duplicados(pares):
+    """Separa pares únicos (cufe, nit) y construye mapa de expansión."""
     vistos = {}
-    cufes_unicos = []
+    unicos = []
     mapa_expansion = []
-    for cufe in cufes:
+    for par in pares:
+        cufe = par[0]
         if cufe not in vistos:
-            vistos[cufe] = len(cufes_unicos)
-            cufes_unicos.append(cufe)
+            vistos[cufe] = len(unicos)
+            unicos.append(par)
         mapa_expansion.append(vistos[cufe])
-    return cufes_unicos, mapa_expansion
+    return unicos, mapa_expansion
 
 
-def _expandir_datos(cufes_original, mapa_expansion, datos_procesados):
+def _expandir_datos(pares_original, mapa_expansion, datos_procesados):
     """Expande datos únicos al orden original, reutilizando datos del primer registro."""
     import copy
     por_cufe = {}
@@ -98,7 +99,8 @@ def _expandir_datos(cufes_original, mapa_expansion, datos_procesados):
             por_cufe[cufe] = d
 
     resultado = []
-    for nuevo_num, cufe in enumerate(cufes_original, 1):
+    for nuevo_num, par in enumerate(pares_original, 1):
+        cufe = par[0]
         original = por_cufe.get(cufe)
         if original:
             fila = copy.deepcopy(original)

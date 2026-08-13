@@ -1,20 +1,20 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 DESCARGADOR - CUFE DIAN AUTOMATION
-v3.7.1 - Fix: limpiar locks huérfanos y puerto antes de lanzar Chrome
+v3.8.0 - Nuevo flujo portal DIAN (campo NIT + popup + bloqueo anti-robot)
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v3.8.0 (adaptación portal DIAN 2026-07-28):
+1. descargar_cufe() recibe parámetro 'nit' — obligatorio para búsqueda
+2. Flujo: CUFE → esperar campo NIT → ingresar NIT → buscar
+3. Popup "Aceptar" detectado y clicado automáticamente tras solicitar descarga
+4. Detección de "Solicitud bloqueada" → estado 'bloqueado_robot'
+5. _buscar_campo_nit(): múltiples selectores CSS con fallback
+6. _detectar_bloqueo_robot(): verifica texto del bloqueo de seguridad DIAN
 
 CAMBIOS v3.7.1:
 1. _limpiar_locks_perfil(): elimina SingletonLock/Socket/Cookie huérfanos
-   antes de lanzar Chrome (fix crash silencioso cuando Chrome no cerró bien)
-2. _liberar_puerto_chrome(): mata procesos Chrome/Edge zombi en el puerto
-   de debug (fix 32/32 errores cuando había una sesión CUFES previa activa)
-
-CAMBIOS v3.7.0:
-1. Carpetas Chrome en carpeta temporal configurable (no en cwd)
-2. Función para limpiar TODAS las carpetas Chrome al finalizar
-3. Navegadores se pueden cerrar individualmente
-4. Mejor manejo de recursos en Windows
+2. _liberar_puerto_chrome(): mata procesos Chrome/Edge zombi en el puerto CDP
 """
 
 import time
@@ -735,7 +735,51 @@ def _guardar_metrica(nav_id: int, cufe_num: int, t_carga: float, t_bypass: float
         log(0, f"⚠️ Error guardando métrica: {exc}", "WARN")
 
 
-def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int,
+def _buscar_campo_nit(page, nav_id: int, timeout_total: float = 8.0):
+    """
+    Busca el campo NIT del portal DIAN con múltiples selectores CSS de fallback.
+    El campo solo aparece después de ingresar el CUFE; se espera su aparición.
+    """
+    selectores = [
+        '#Nit',
+        '#DocumentNit',
+        '#nitNumber',
+        '#nit',
+        'css:input[id*="nit" i]',
+        'css:input[name*="nit" i]',
+        'css:input[placeholder*="NIT" i]',
+        'css:input[placeholder*="nit" i]',
+    ]
+    tiempo_por_selector = max(1.0, timeout_total / len(selectores))
+    for sel in selectores:
+        try:
+            campo = page.ele(sel, timeout=tiempo_por_selector)
+            if campo:
+                log(nav_id, f"✓ Campo NIT: {sel}", "DEBUG")
+                return campo
+        except Exception:
+            pass
+    return None
+
+
+def _detectar_bloqueo_robot(page) -> bool:
+    """Verifica si el portal DIAN mostró el mensaje de bloqueo anti-robot."""
+    textos_bloqueo = [
+        'Solicitud bloqueada',
+        'controles de seguridad',
+        'verificación de que el usuario es humano',
+        'Request blocked',
+    ]
+    for texto in textos_bloqueo:
+        try:
+            if page.ele(f'text:{texto}', timeout=0.8):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def descargar_cufe(page, bypass, cufe: str, nit: str, numero: int, total: int, nav_id: int,
                    carpeta_pdfs: str, intento: int = 1, max_reintentos: int = 2) -> dict:
     """
     Descarga un CUFE específico.
@@ -754,6 +798,7 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
     resultado = {
         'numero': numero,
         'cufe': cufe,
+        'nit': nit,
         'estado': 'error',
         'pdf': None,
         'ruta_pdf': None,
@@ -798,19 +843,41 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         # ── inicio etapa INPUT ────────────────────────────────────────────
         _tm_input_ini = time.time()
 
-        log(nav_id, "⌨️ Ingresando...", "INFO")
+        log(nav_id, "⌨️ Ingresando CUFE...", "INFO")
         campo_cufe.clear()
-        # Espera activa: hasta 1s para que el DOM refleje el campo vacío (~10-50ms real)
         _esperar(lambda: not (campo_cufe.prop('value') or '').strip(), timeout=1.0)
         campo_cufe.input(cufe, clear=True)
-        # Espera activa: hasta 3s para que el valor esté escrito en el campo (~50-150ms real)
         _esperar(lambda: len(campo_cufe.prop('value') or '') > 10, timeout=3.0)
+
+        # ── Esperar y llenar campo NIT (aparece tras ingresar el CUFE) ────
+        log(nav_id, "⌨️ Esperando campo NIT...", "INFO")
+        campo_nit = _buscar_campo_nit(page, nav_id, timeout_total=8.0)
+        if not campo_nit:
+            _tm_input_fin = time.time()
+            resultado['mensaje'] = "Campo NIT no encontrado"
+            resultado['estado'] = 'retry'
+            return resultado
+
+        campo_nit.clear()
+        _esperar(lambda: not (campo_nit.prop('value') or '').strip(), timeout=1.0)
+        campo_nit.input(nit, clear=True)
+        _esperar(lambda: len(campo_nit.prop('value') or '') > 2, timeout=3.0)
+        log(nav_id, f"✓ NIT ingresado", "INFO")
+        # ─────────────────────────────────────────────────────────────────
 
         _t0 = time.time()
         bypass.intentar(timeout=10)
         _tm_bypass += time.time() - _t0
 
         time.sleep(1.5)
+
+        # Verificar bloqueo anti-robot antes de buscar
+        if _detectar_bloqueo_robot(page):
+            log(nav_id, "🚫 BLOQUEADO por controles anti-robot", "WARN")
+            _tm_input_fin = time.time()
+            resultado['mensaje'] = "Bloqueado anti-robot DIAN"
+            resultado['estado'] = 'bloqueado_robot'
+            return resultado
 
         boton_buscar = page.ele('css:button.search-document', timeout=8)
         if not boton_buscar:
@@ -821,9 +888,6 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
 
         log(nav_id, "🔍 Buscando...", "INFO")
         boton_buscar.click()
-        # 0.5s mínimo necesario: el portal DIAN envía la búsqueda via XHR/fetch.
-        # No reducir a 0: bypass.intentar() que sigue debe ejecutarse DESPUÉS de que
-        # la petición haya salido, o podría no detectar un Cloudflare tardío.
         time.sleep(0.5)
 
         _t0 = time.time()
@@ -832,10 +896,17 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
 
         time.sleep(1)
 
+        # Verificar bloqueo anti-robot tras la búsqueda
+        if _detectar_bloqueo_robot(page):
+            log(nav_id, "🚫 BLOQUEADO por controles anti-robot (post-búsqueda)", "WARN")
+            _tm_input_fin = time.time()
+            resultado['mensaje'] = "Bloqueado anti-robot DIAN"
+            resultado['estado'] = 'bloqueado_robot'
+            return resultado
+
         eventos_encontrados = extraer_eventos(page, nav_id)
         resultado['eventos'] = eventos_encontrados
 
-        # === DETECTAR TIPO DE DOCUMENTO DESDE HTML ===
         tipo_doc = detectar_tipo_documento(page, nav_id)
         resultado['tipo_documento'] = tipo_doc
 
@@ -900,9 +971,33 @@ def descargar_cufe(page, bypass, cufe: str, numero: int, total: int, nav_id: int
         time.sleep(1)
 
         boton_pdf.click()
-        log(nav_id, "✓ Click OK", "OK")
-        # 0.2s mínimo: Chrome necesita procesar el click y abrir el stream de descarga
-        # antes de que el archivo aparezca en disco. detectar_pdf() ya hace polling c/0.5s.
+        log(nav_id, "✓ Click descarga", "OK")
+
+        # ── Popup "Aceptar" — modal Bootbox de contraseña PDF ────────────
+        # El portal muestra div.modal-download-info con aviso de contraseña.
+        # El botón "Aceptar" vive en el .modal-footer de ese modal.
+        # Si no se confirma, el proceso queda bloqueado y no descarga nada.
+        try:
+            modal_visible = _esperar(
+                lambda: bool(page.ele('css:.modal-download-info.in', timeout=0.3)),
+                timeout=6.0
+            )
+            if modal_visible:
+                boton_aceptar = page.ele('css:.modal-download-info .modal-footer button', timeout=3)
+                if not boton_aceptar:
+                    boton_aceptar = page.ele('css:.modal-download-info button', timeout=2)
+                if boton_aceptar:
+                    boton_aceptar.click()
+                    log(nav_id, "✓ Modal 'Aceptar' confirmado", "OK")
+                    time.sleep(0.3)
+                else:
+                    log(nav_id, "⚠️ Modal visible pero botón Aceptar no encontrado", "WARN")
+            else:
+                log(nav_id, "ℹ️ Modal de contraseña no apareció — continuando", "DEBUG")
+        except Exception as e:
+            log(nav_id, f"⚠️ Error en popup Aceptar: {str(e)[:40]}", "WARN")
+        # ─────────────────────────────────────────────────────────────────
+
         time.sleep(0.2)
 
         ruta_pdf = detectar_pdf(cufe, nav_id, archivos_antes, carpeta_pdfs, timeout=20)

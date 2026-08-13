@@ -1,8 +1,15 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-ORQUESTADOR - CUFE DIAN AUTOMATION (LINUX/FEDORA FINAL)
-v3.7.6 - Conecta eventos, tipo de documento y gestiona memoria
+ORQUESTADOR - CUFE DIAN AUTOMATION
+v3.8.0 - Flujo CUFE+NIT, manejo bloqueado_robot, max navegadores reducido
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v3.8.0:
+1. ejecutar_sistema() acepta List[Tuple[str,str]] = [(cufe, nit), ...]
+2. NIT se propaga al descargador y al extractor (password PDF)
+3. Estado 'bloqueado_robot': no reintenta, queda en No Procesados
+4. Max navegadores por defecto: 3 (anti-robot) — antes 10
+5. Arranque escalonado: 5s entre navegadores (antes 3s)
 """
 
 import time
@@ -35,12 +42,12 @@ _stop_signal = threading.Event()
 
 # Control de navegadores
 _navegadores_en_uso = 0
-_max_navegadores = 10
+# Techo de seguridad — el número real lo controla config.json → navegadores.cantidad_paralela
+_max_navegadores = 20
 _lock_navegadores = threading.Lock()
 
-# Arranque escalonado: segundos de espera entre el inicio de cada navegador.
-# Evita que Cloudflare detecte múltiples conexiones simultáneas (crítico en Windows).
-ARRANQUE_INTERVALO_SEG = 3
+# Arranque escalonado: segundos entre el inicio de cada navegador (anti-robot).
+ARRANQUE_INTERVALO_SEG = 5
 
 
 def configurar_callbacks(callback_progreso=None, callback_mensaje=None):
@@ -97,13 +104,8 @@ def _liberar_slot_navegador():
 
 
 def _calcular_max_navegadores(num_cufes: int, config_max: int) -> int:
-    """Calcula el número óptimo de navegadores"""
-    import platform
-    optimo = min(num_cufes, config_max)
-    if platform.system() == "Windows":
-        optimo = min(optimo, 8)
-    optimo = max(optimo, 2)
-    return optimo
+    """Número de navegadores: el menor entre CUFEs disponibles, lo que dice config y el techo."""
+    return max(1, min(num_cufes, config_max, _max_navegadores))
 
 
 def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: queue.Queue,
@@ -140,9 +142,9 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
                 item = None
                 try:
                     item = cola_fallidos.get_nowait()
-                    if len(item) == 5:
-                        cufe, numero, total, intento, nav_anterior = item
-                        if nav_anterior == nav_id: # Evitar loop mismo nav
+                    if len(item) == 6:
+                        cufe, nit, numero, total, intento, nav_anterior = item
+                        if nav_anterior == nav_id:  # Evitar loop mismo nav
                             cola_fallidos.put(item)
                             item = None
                 except queue.Empty:
@@ -158,29 +160,40 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
                 if item is None: # Señal de fin
                     break
                 
-                # Desempaquetar
-                if len(item) == 5:
-                    cufe, numero, total, intento, nav_anterior = item
-                elif len(item) == 4:
-                    cufe, numero, total, intento = item
+                # Desempaquetar (formato: cufe, nit, numero, total, intento[, nav_anterior])
+                if len(item) == 6:
+                    cufe, nit, numero, total, intento, nav_anterior = item
+                elif len(item) == 5:
+                    cufe, nit, numero, total, intento = item
                 else:
-                    cufe, numero, total = item
+                    cufe, nit, numero, total = item
                     intento = 1
-                
+
                 _notificar_mensaje(f"Consultando factura {numero} de {total}...", "info")
-                
+
                 # DESCARGAR
                 resultado = descargar_cufe(
-                    page, bypass, cufe, numero, total, nav_id,
+                    page, bypass, cufe, nit, numero, total, nav_id,
                     carpeta_pdfs, intento=intento, max_reintentos=max_reintentos
                 )
-                
-                if resultado['estado'] == 'retry':
+
+                if resultado['estado'] == 'bloqueado_robot':
+                    # No reintenta automáticamente — requiere intervención humana
+                    fallos_consecutivos += 1
+                    resultado['estado'] = 'error'
+                    resultado['mensaje'] = f"Bloqueado anti-robot DIAN (intento {intento})"
+                    cola_resultados.put(resultado)
+                    _notificar_progreso()
+                    _notificar_mensaje(f"⚠ Factura {numero} bloqueada por DIAN — requiere atención", "warning")
+                    # Pausa para reducir presión antes del siguiente CUFE
+                    time.sleep(15)
+
+                elif resultado['estado'] == 'retry':
                     fallos_consecutivos += 1
                     if intento < max_reintentos:
-                        cola_fallidos.put((cufe, numero, total, intento + 1, nav_id))
+                        cola_fallidos.put((cufe, nit, numero, total, intento + 1, nav_id))
                         _notificar_mensaje(f"Reintentando factura {numero}...", "warning")
-                        
+
                         if fallos_consecutivos >= MAX_FALLOS_ANTES_REINICIAR:
                             cerrar_navegador(nav_id)
                             time.sleep(2)
@@ -197,21 +210,22 @@ def trabajador_descarga(nav_id: int, cola_trabajo: queue.Queue, cola_fallidos: q
                     fallos_consecutivos = 0
                     cola_resultados.put(resultado)
                     _notificar_progreso()
-                    
+
                     if resultado['estado'] == 'exitoso' and resultado['ruta_pdf']:
-                        # === AQUÍ PASAMOS EVENTOS Y TIPO AL EXTRACTOR ===
                         cola_pdfs.put({
                             'numero': numero,
                             'cufe': cufe,
+                            'nit': nit,
                             'ruta_pdf': resultado['ruta_pdf'],
                             'eventos': resultado.get('eventos', ''),
-                            'tipo_documento': resultado.get('tipo_documento', {})  # <--- NUEVO
+                            'tipo_documento': resultado.get('tipo_documento', {})
                         })
                         _notificar_mensaje(f"Factura {numero} descargada", "success")
                     elif resultado['estado'] == 'no_encontrado':
                         cola_pdfs.put({
                             'numero': numero,
                             'cufe': cufe,
+                            'nit': nit,
                             'ruta_pdf': None,
                             'no_encontrado': True
                         })
@@ -245,11 +259,12 @@ def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list,
             
             numero = item['numero']
             cufe = item['cufe']
+            nit = item.get('nit', '')
             ruta_pdf = item.get('ruta_pdf')
             no_encontrado = item.get('no_encontrado', False)
             eventos = item.get('eventos', '')
-            tipo_documento = item.get('tipo_documento', {})  # <--- NUEVO
-            
+            tipo_documento = item.get('tipo_documento', {})
+
             if no_encontrado or ruta_pdf is None:
                 datos = {
                     'Numero': numero,
@@ -261,13 +276,12 @@ def trabajador_extractor(cola_pdfs: queue.Queue, datos_completos: list,
                 with lock_excel:
                     datos_completos.append(datos)
                 continue
-            
+
             log(99, f"📄 Extrayendo #{numero}...", "INFO")
-            
-            # Extraer datos del PDF (ahora con tipo de documento)
-            datos = extraer_datos_pdf(ruta_pdf, cufe, numero, tipo_documento)  # <--- MODIFICADO
-            
-            # === INYECTAR EVENTOS EN EL DICCIONARIO ===
+
+            # NIT como contraseña para abrir el PDF cifrado por la DIAN
+            datos = extraer_datos_pdf(ruta_pdf, cufe, numero, tipo_documento, password=nit or None)
+
             datos['Eventos'] = eventos
             
             with lock_excel:
@@ -321,8 +335,8 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     lock_excel = threading.Lock()
     datos_completos = []
     
-    for i, cufe in enumerate(cufes, 1):
-        cola_trabajo.put((cufe, i, len(cufes), 1))
+    for i, (cufe, nit) in enumerate(cufes, 1):
+        cola_trabajo.put((cufe, nit, i, len(cufes), 1))
     
     for _ in range(NUM_NAVEGADORES):
         cola_trabajo.put(None)
@@ -365,9 +379,9 @@ def ejecutar_sistema(cufes: list, config: dict, callback_progreso=None, callback
     while not cola_fallidos.empty():
         try:
             item = cola_fallidos.get_nowait()
-            cufe = item[0]; numero = item[1]; intento = item[3]
+            cufe = item[0]; nit = item[1]; numero = item[2]; intento = item[4]
             cola_resultados.put({
-                'numero': numero, 'cufe': cufe, 'estado': 'error',
+                'numero': numero, 'cufe': cufe, 'nit': nit, 'estado': 'error',
                 'mensaje': f'No procesado (intento {intento})',
                 'intento': intento,
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')

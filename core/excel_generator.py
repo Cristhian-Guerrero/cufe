@@ -1,7 +1,7 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 GENERADOR DE EXCEL - CUFE DIAN AUTOMATION (FULL DATA)
-v6.2 - Reporte completo con Eventos, País y Datos Fiscales
+v6.3 - IVA separado por tarifa (IVA 19% / IVA 5%) + motivo bloqueado_robot
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -60,10 +60,11 @@ class GeneradorExcel:
         ('Adq_RegimenFiscal', 'Régimen', 15, 3),         # <--- NUEVO
         
         # GRUPO 4: FINANCIERO
-        ('Subtotal', 'Subtotal', 16, 4), 
-        ('Total_Bruto', 'Total Bruto', 16, 4), 
-        ('IVA', 'IVA', 14, 4), 
-        ('INC', 'INC', 14, 4), 
+        ('Subtotal', 'Subtotal', 16, 4),
+        ('Total_Bruto', 'Total Bruto', 16, 4),
+        ('IVA_19', 'IVA 19%', 14, 4),
+        ('IVA_5', 'IVA 5%', 14, 4),
+        ('INC', 'INC', 14, 4),
         ('Bolsas', 'Bolsas', 12, 4),
         ('Total_Factura', 'TOTAL A PAGAR', 18, 4),
         ('Anticipos', 'Anticipos', 14, 4), 
@@ -256,7 +257,10 @@ def _motivo_legible(mensaje: str) -> str:
         return 'Error desconocido'
     mapa = [
         ('No existe en DIAN',           'CUFE no registrado en la DIAN'),
+        ('Bloqueado anti-robot',         'Bloqueado por controles de seguridad DIAN — requiere intervención humana'),
+        ('sin_nit',                      'CUFE sin NIT asociado en el archivo de entrada'),
         ('Campo CUFE no encontrado',     'Error de conexión: campo de búsqueda no disponible'),
+        ('Campo NIT no encontrado',      'Error de conexión: campo NIT no disponible en el portal'),
         ('Botón búsqueda no encontrado', 'Error de conexión: botón de búsqueda no disponible'),
         ('Timeout botón PDF',            'Timeout: el botón de descarga PDF no apareció'),
         ('PDF no detectado',             'Timeout: PDF no fue detectado en carpeta de descargas'),

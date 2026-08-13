@@ -1,18 +1,22 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
-v7.5.1 - FIX CRÍTICO: IVA capturaba teléfono + Teléfono no se extraía
+v7.6.0 - PDF con contraseña (NIT) + IVA separado por tarifa (19% / 5%)
 ═══════════════════════════════════════════════════════════════════════════
 
+CAMBIOS v7.6.0:
+1. extraer_datos() acepta password=NIT para abrir PDFs cifrados
+   (portal DIAN cifra el PDF con el NIT ingresado en la búsqueda)
+2. IVA dividido en IVA_19 (19%) e IVA_5 (5%) — se elimina campo IVA único
+
 FIX v7.5 (IVA):
-1. _extraer_totales ahora busca SOLO en bloque "Datos Totales" (no en todo el texto)
-2. Validación de montos: rechaza valores > 100 mil millones (teléfonos capturados)
+1. _extraer_totales ahora busca SOLO en bloque "Datos Totales"
+2. Validación de montos: rechaza valores > 100 mil millones
 3. Regex de IVA no salta líneas para evitar capturar campo siguiente
 
 FIX v7.5.1 (Teléfono):
-4. Nuevo método _extraer_telefono_bloque() maneja pdfplumber mezclando columnas
+4. _extraer_telefono_bloque() maneja pdfplumber mezclando columnas
 5. Busca teléfono en misma línea Y en líneas siguientes (hasta 4 líneas)
-6. Detecta números de 7+ dígitos que pdfplumber pone en líneas separadas
 """
 
 import os
@@ -28,13 +32,21 @@ class ExtractorPDF:
     def limpiar_texto(texto):
         if not texto: return ""
         texto = re.sub(r'[\u3164\ufeff\u200b-\u200f\u202a-\u202e]', '', texto)
+        # pdfplumber inserta | entre columnas adyacentes del PDF.
+        # || o m\u00e1s = columna vac\u00eda \u2192 se elimina con un espacio.
+        # | \u00fanico en medio = dos valores reales pegados \u2192 separador legible.
+        texto = re.sub(r'\|{2,}', ' ', texto)
+        texto = texto.strip('|').strip()
+        texto = re.sub(r'\|', ' / ', texto)
         return re.sub(r'\s+', ' ', texto).strip()
     
     @staticmethod
     def limpiar_nombre_puro(texto):
         if not texto: return ""
+        # Quitar sufijos numéricos que pipe-cleaning puede dejar: " / 8056970" al final
+        texto = re.sub(r'\s*/\s*[\d\.\-]*\s*$', '', texto)
         texto = re.sub(r'\s+\d+\s*\d*$', '', texto)
-        return texto.strip(" .,;-")
+        return texto.strip(" .,;-/")
 
     @staticmethod
     def limpiar_monto(texto):
@@ -166,41 +178,42 @@ class ExtractorPDF:
             datos['Adq_RazonSocial'] = limpio
             datos['Adq_NombreComercial'] = ''
 
-    def extraer_datos(self, ruta_pdf, cufe_original, numero, tipo_documento=None):
+    def extraer_datos(self, ruta_pdf, cufe_original, numero, tipo_documento=None, password=None):
         ruta_pdf_absoluta = os.path.abspath(ruta_pdf)
-        
+
         datos = {
             'Numero': numero, 'Estado': '✅ Procesado', 'Ruta_PDF': ruta_pdf_absoluta, 'Notas': '',
             'CUFE': cufe_original, 'Numero_Factura': '', 'Fecha_Emision': '', 'Fecha_Vencimiento': '',
             'Tipo_Operacion': '', 'Forma_Pago': '', 'Medio_Pago': '', 'Orden_Pedido': '', 'Moneda': 'COP',
-            'Eventos': '', 
+            'Eventos': '',
             'Emisor_RazonSocial': '', 'Emisor_NombreComercial': '', 'Emisor_NIT': '',
             'Emisor_TipoContribuyente': '', 'Emisor_RegimenFiscal': '', 'Emisor_Responsabilidad': '',
             'Emisor_ActividadEconomica': '', 'Emisor_Pais': '',
             'Emisor_Departamento': '', 'Emisor_Municipio': '',
             'Emisor_Direccion': '', 'Emisor_Telefono': '', 'Emisor_Correo': '',
             'Adq_RazonSocial': '', 'Adq_NombreComercial': '', 'Adq_Tipo': '',
-            'Adq_NumeroDocumento': '', 'Adq_TipoDocumento': '', 
+            'Adq_NumeroDocumento': '', 'Adq_TipoDocumento': '',
             'Adq_Pais': '', 'Adq_Responsabilidad': '', 'Adq_RegimenFiscal': '',
-            'Adq_Departamento': '', 'Adq_Municipio': '', 
+            'Adq_Departamento': '', 'Adq_Municipio': '',
             'Adq_Direccion': '', 'Adq_Telefono': '', 'Adq_Correo': '',
-            'Subtotal': 0, 'Total_Bruto': 0, 
-            'IVA': 0, 'INC': 0, 'Bolsas': 0, 'Otros_Impuestos': 0,
-            'Total_Factura': 0, 'Anticipos': 0, 
+            'Subtotal': 0, 'Total_Bruto': 0,
+            'IVA_19': 0, 'IVA_5': 0, 'INC': 0, 'Bolsas': 0, 'Otros_Impuestos': 0,
+            'Total_Factura': 0, 'Anticipos': 0,
             'Rete_Fuente': 0, 'Rete_IVA': 0, 'Rete_ICA': 0
         }
-        
+
         if not os.path.exists(ruta_pdf_absoluta):
             datos['Estado'] = '❌ PDF no encontrado'
             return datos
-        
+
         try:
-            with pdfplumber.open(ruta_pdf_absoluta) as pdf:
+            kwargs = {'password': password} if password else {}
+            with pdfplumber.open(ruta_pdf_absoluta, **kwargs) as pdf:
                 texto_completo = ""
                 for pagina in pdf.pages:
                     txt = pagina.extract_text()
                     if txt: texto_completo += txt + "\n"
-                
+
                 if not texto_completo.strip():
                     datos['Estado'] = '⚠️ PDF sin texto'
                     return datos
@@ -209,7 +222,8 @@ class ExtractorPDF:
                 self._extraer_emisor(datos, texto_completo)
                 self._extraer_adquiriente(datos, texto_completo)
                 self._extraer_totales(datos, texto_completo)
-                
+                self._extraer_iva_tabla(datos, pdf.pages)
+
         except Exception as e:
             log(99, f"Error: {str(e)[:50]}", "ERROR")
             datos['Estado'] = f'❌ Error Lectura'
@@ -338,7 +352,8 @@ class ExtractorPDF:
         for patron in patrones_nit:
             m = re.search(patron, txt, re.IGNORECASE)
             if m:
-                datos['Emisor_NIT'] = m.group(1).strip()
+                # El NIT solo admite dígitos, puntos y guiones — cualquier otra cosa es ruido
+                datos['Emisor_NIT'] = re.sub(r'[^\d\.\-]', '', m.group(1)).strip('.-')
                 break
         
         m = re.search(r'Tipo de [Cc]ontribuyente:\s*([^\n]+)', txt, re.IGNORECASE)
@@ -522,6 +537,80 @@ class ExtractorPDF:
                 if email_match:
                     datos['Adq_Correo'] = email_match.group(1)
 
+    def _extraer_iva_tabla(self, datos, paginas):
+        """
+        Lee la tabla "Detalles de Productos" del PDF (ya desbloqueado) y suma
+        el IVA por tarifa: columna IVA → IVA_19 o IVA_5 según la columna %.
+
+        Sobreescribe los valores de _extraer_totales solo si encuentra datos reales
+        en la tabla (tienen prioridad sobre los regex del texto).
+        """
+        iva_19 = 0.0
+        iva_5  = 0.0
+        encontrado = False
+
+        for pagina in paginas:
+            try:
+                tablas = pagina.extract_tables()
+                if not tablas:
+                    continue
+
+                for tabla in tablas:
+                    if not tabla or len(tabla) < 2:
+                        continue
+
+                    # Buscar fila de encabezado que contenga "IVA" y "%"
+                    encabezado = None
+                    datos_inicio = 0
+                    for i, fila in enumerate(tabla):
+                        if fila is None:
+                            continue
+                        celdas = [str(c or '').strip().upper() for c in fila]
+                        if any('IVA' in c for c in celdas) and any(c in ('%', 'TARIFA', '% IVA') for c in celdas):
+                            encabezado = celdas
+                            datos_inicio = i + 1
+                            break
+
+                    if encabezado is None:
+                        continue
+
+                    # Encontrar índices de las columnas IVA y %
+                    idx_iva = next((i for i, c in enumerate(encabezado) if 'IVA' in c and '%' not in c), None)
+                    idx_pct = next((i for i, c in enumerate(encabezado) if c in ('%', 'TARIFA', '% IVA') or (c == '%')), None)
+
+                    # Fallback: buscar columna "%" standalone
+                    if idx_pct is None:
+                        idx_pct = next((i for i, c in enumerate(encabezado) if c.strip() == '%'), None)
+
+                    if idx_iva is None or idx_pct is None:
+                        continue
+
+                    # Sumar IVA por tarifa
+                    for fila in tabla[datos_inicio:]:
+                        if not fila or len(fila) <= max(idx_iva, idx_pct):
+                            continue
+                        try:
+                            val_iva = self.limpiar_monto(str(fila[idx_iva] or ''))
+                            val_pct = self.limpiar_monto(str(fila[idx_pct] or ''))
+                            if val_iva <= 0:
+                                continue
+                            if abs(val_pct - 19) < 1:
+                                iva_19 += val_iva
+                                encontrado = True
+                            elif abs(val_pct - 5) < 1:
+                                iva_5 += val_iva
+                                encontrado = True
+                        except Exception:
+                            continue
+
+            except Exception:
+                continue
+
+        if encontrado:
+            datos['IVA_19'] = self._validar_monto(iva_19)
+            datos['IVA_5']  = self._validar_monto(iva_5)
+            log(99, f"✓ IVA tabla: 19%={iva_19:,.0f} / 5%={iva_5:,.0f}", "DEBUG")
+
     def _extraer_totales(self, datos, texto):
         """
         ═══════════════════════════════════════════════════════════════
@@ -575,13 +664,17 @@ class ExtractorPDF:
                 r'Total [Bb]ruto\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
                 r'Total bruto documento\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
             ],
-            'IVA': [
-                # FIX v7.5: Buscar "IVA" como campo independiente (NO dentro de "01 - IVA")
-                # Requiere que "IVA" esté al inicio de línea o después de espacio/tabulador
-                r'(?:^|\n)\s*IVA\s+([\d\.,]+)',
-                r'(?:^|\n)\s*IVA\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
-                r'Total IVA\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
-                r'Total impuesto\s*\(=\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            'IVA_19': [
+                r'(?:^|\n)\s*IVA\s+19\s*%?\s+([\d\.,]+)',
+                r'(?:^|\n)\s*IVA\s+19\s*%?\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Impuesto\s+19\s*%\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'IVA\s*\(19%?\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+            ],
+            'IVA_5': [
+                r'(?:^|\n)\s*IVA\s+5\s*%?\s+([\d\.,]+)',
+                r'(?:^|\n)\s*IVA\s+5\s*%?\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'Impuesto\s+5\s*%\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
+                r'IVA\s*\(5%?\)\s*[\n\r]*\s*(?:COP)?\s*\$?\s*([\d\.,]+)',
             ],
             'INC': [
                 r'(?:^|\n)\s*INC\s+([\d\.,]+)',
@@ -635,6 +728,6 @@ class ExtractorPDF:
                     datos[campo] = self._validar_monto(monto)
                     break
 
-def extraer_datos_pdf(ruta_pdf, cufe_original, numero, tipo_documento=None):
+def extraer_datos_pdf(ruta_pdf, cufe_original, numero, tipo_documento=None, password=None):
     extractor = ExtractorPDF()
-    return extractor.extraer_datos(ruta_pdf, cufe_original, numero, tipo_documento)
+    return extractor.extraer_datos(ruta_pdf, cufe_original, numero, tipo_documento, password=password)
