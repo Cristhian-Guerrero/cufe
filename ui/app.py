@@ -1,5 +1,5 @@
 """
-Sistema de Consulta CUFE DIAN - v5.1.0
+Sistema de Consulta CUFE DIAN - v5.2.0
 Diseño Limpio y Moderno
 © C. Guerrero | A.S. Contadores & Asesores SAS
 """
@@ -20,6 +20,7 @@ try:
     from core.orquestador import ejecutar_sistema
     from core.validador import cargar_cufes
     from core.excel_generator import generar_excel_final
+    from utils import obtener_logger
     MODULOS_DISPONIBLES = True
 except ImportError as e:
     print(f"Aviso: Módulos no disponibles ({e})")
@@ -32,7 +33,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '5.1.0',
+    'version': '5.2.0',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
@@ -579,6 +580,14 @@ class App(tk.Tk):
             pdfs = os.path.join(resultados_dir, "Facturas_PDF")
             excel_dir = os.path.join(resultados_dir, "Reportes_Excel")
             temp = os.path.join(resultados_dir, ".cufe_temp")
+
+            # Log detallado a archivo (WARN/DEBUG de extracción, ej. Cuadre IVA
+            # a revisar) — queda guardado aunque la GUI no se lance desde una
+            # terminal visible.
+            logs_dir = os.path.join(resultados_dir, "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            archivo_log = os.path.join(logs_dir, f"ejecucion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+            obtener_logger().configurar_archivo(archivo_log)
 
             os.makedirs(pdfs, exist_ok=True)
             os.makedirs(excel_dir, exist_ok=True)

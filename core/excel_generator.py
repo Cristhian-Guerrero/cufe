@@ -1,7 +1,8 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 GENERADOR DE EXCEL - CUFE DIAN AUTOMATION (FULL DATA)
-v6.3 - IVA separado por tarifa (IVA 19% / IVA 5%) + motivo bloqueado_robot
+v6.4.1 - Base gravable por tarifa (0%/5%/19%) + Total Base
+         (Cuadre IVA se calcula y se loguea pero no se muestra en columna)
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -62,14 +63,18 @@ class GeneradorExcel:
         # GRUPO 4: FINANCIERO
         ('Subtotal', 'Subtotal', 16, 4),
         ('Total_Bruto', 'Total Bruto', 16, 4),
-        ('IVA_19', 'IVA 19%', 14, 4),
+        ('Base_0', 'Base IVA 0%', 14, 4),
+        ('Base_5', 'Base IVA 5%', 14, 4),
         ('IVA_5', 'IVA 5%', 14, 4),
+        ('Base_19', 'Base IVA 19%', 14, 4),
+        ('IVA_19', 'IVA 19%', 14, 4),
         ('INC', 'INC', 14, 4),
         ('Bolsas', 'Bolsas', 12, 4),
+        ('Total_Base', 'Total Base', 16, 4),
         ('Total_Factura', 'TOTAL A PAGAR', 18, 4),
-        ('Anticipos', 'Anticipos', 14, 4), 
-        ('Rete_Fuente', 'ReteFuente', 14, 4), 
-        ('Rete_IVA', 'ReteIVA', 14, 4), 
+        ('Anticipos', 'Anticipos', 14, 4),
+        ('Rete_Fuente', 'ReteFuente', 14, 4),
+        ('Rete_IVA', 'ReteIVA', 14, 4),
         ('Rete_ICA', 'ReteICA', 14, 4),
         
         # GRUPO 5: GESTIÓN
@@ -223,7 +228,7 @@ class GeneradorExcel:
                     if cell.col_idx == col_eventos and cell.value and len(str(cell.value)) > 2:
                         cell.font = Font(name='Segoe UI', size=9, color="E26B0A", bold=True) # Naranja
                         cell.alignment = align_center
-                    
+
                     if cell.col_idx == col_pdf:
                         path = cell.value
                         if path and isinstance(path, str) and os.path.exists(path):

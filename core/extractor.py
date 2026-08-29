@@ -1,8 +1,21 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
-v7.6.0 - PDF con contraseña (NIT) + IVA separado por tarifa (19% / 5%)
+v7.7.0 - Base gravable por tarifa (Base_19/Base_5/Base_0) + Cuadre IVA
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v7.7.0:
+1. _extraer_iva_tabla() ahora también calcula la base gravable por línea
+   (Precio unitario × Cantidad − Descuento detalle + Recargo detalle, o
+   directo desde "Precio unitario de venta" × Cantidad si está disponible)
+   y la agrupa por tarifa: Base_19 / Base_5 / Base_0. NO recalcula el IVA,
+   solo suma el valor ya reportado por línea (igual que antes).
+2. Nuevo _calcular_cuadre_iva(): verifica (no recalcula) que Total_Base
+   cuadre con Subtotal y que base×tarifa cuadre con el IVA extraído, con
+   tolerancia de redondeo. Resultado en datos['Cuadre_IVA'] = 'OK'/'Revisar'.
+3. Filas de la tabla sin Cantidad/Precio unitario detectable, o facturas
+   con Cuadre_IVA='Revisar', quedan logueadas con la fila cruda de
+   pdfplumber para autodiagnóstico sin necesidad de scripts aparte.
 
 CAMBIOS v7.6.0:
 1. extraer_datos() acepta password=NIT para abrir PDFs cifrados
@@ -199,7 +212,8 @@ class ExtractorPDF:
             'Subtotal': 0, 'Total_Bruto': 0,
             'IVA_19': 0, 'IVA_5': 0, 'INC': 0, 'Bolsas': 0, 'Otros_Impuestos': 0,
             'Total_Factura': 0, 'Anticipos': 0,
-            'Rete_Fuente': 0, 'Rete_IVA': 0, 'Rete_ICA': 0
+            'Rete_Fuente': 0, 'Rete_IVA': 0, 'Rete_ICA': 0,
+            'Base_19': 0, 'Base_5': 0, 'Base_0': 0, 'Total_Base': 0, 'Cuadre_IVA': ''
         }
 
         if not os.path.exists(ruta_pdf_absoluta):
@@ -223,6 +237,7 @@ class ExtractorPDF:
                 self._extraer_adquiriente(datos, texto_completo)
                 self._extraer_totales(datos, texto_completo)
                 self._extraer_iva_tabla(datos, pdf.pages)
+                self._calcular_cuadre_iva(datos)
 
         except Exception as e:
             log(99, f"Error: {str(e)[:50]}", "ERROR")
@@ -539,15 +554,38 @@ class ExtractorPDF:
 
     def _extraer_iva_tabla(self, datos, paginas):
         """
-        Lee la tabla "Detalles de Productos" del PDF (ya desbloqueado) y suma
-        el IVA por tarifa: columna IVA → IVA_19 o IVA_5 según la columna %.
+        Lee la tabla "Detalles de Productos" del PDF (ya desbloqueado):
+          - suma el IVA por tarifa: columna IVA → IVA_19 o IVA_5 según %.
+          - calcula la BASE gravable por línea y la agrupa por la misma
+            tarifa → Base_19 / Base_5 / Base_0. NO recalcula el IVA (se usa
+            tal cual lo reporta la columna IVA), solo agrupa la base.
+
+        Layout real confirmado (factura DIAN estándar):
+          Nro | Código | Descripción | U/M | Cantidad | Precio unitario |
+          Descuento detalle | Recargo detalle | [IMPUESTOS→] IVA | % | INC | %
+          | Precio unitario de venta
+
+        OJO: hay DOS columnas "%" (una para IVA, otra para INC, agrupadas
+        bajo el super-encabezado "IMPUESTOS"). Se toma el "%" que aparece
+        DESPUÉS de la columna IVA y ANTES de INC — nunca el de INC.
+
+        Base por línea: PRIORIDAD a Precio unitario × Cantidad − Descuento +
+        Recargo (fórmula explícita, sin ambigüedad sobre si incluye IVA).
+        Solo cae a "Precio unitario de venta" × Cantidad si Precio unitario
+        no está disponible en la tabla. Si ambas columnas están presentes y
+        difieren más allá de la tolerancia, se loguea como advertencia —
+        eso indicaría que "Precio unitario de venta" no es neto de IVA en
+        esta plantilla y NO debe usarse como fuente de base en el futuro.
+        Si no hay columnas suficientes para ninguna fórmula, la fila queda
+        sin base y se loguea cruda para diagnóstico.
 
         Sobreescribe los valores de _extraer_totales solo si encuentra datos reales
         en la tabla (tienen prioridad sobre los regex del texto).
         """
-        iva_19 = 0.0
-        iva_5  = 0.0
+        iva_19 = iva_5 = 0.0
+        base_19 = base_5 = base_0 = 0.0
         encontrado = False
+        filas_debug = []
 
         for pagina in paginas:
             try:
@@ -574,42 +612,147 @@ class ExtractorPDF:
                     if encabezado is None:
                         continue
 
-                    # Encontrar índices de las columnas IVA y %
+                    # Índice de la columna IVA (valor)
                     idx_iva = next((i for i, c in enumerate(encabezado) if 'IVA' in c and '%' not in c), None)
-                    idx_pct = next((i for i, c in enumerate(encabezado) if c in ('%', 'TARIFA', '% IVA') or (c == '%')), None)
+                    idx_inc = next((i for i, c in enumerate(encabezado) if c == 'INC'), None)
 
-                    # Fallback: buscar columna "%" standalone
+                    # % de IVA: primer "%" DESPUÉS de IVA y ANTES de INC (nunca el de INC)
+                    idx_pct = None
+                    if idx_iva is not None:
+                        limite = idx_inc if (idx_inc is not None and idx_inc > idx_iva) else len(encabezado)
+                        idx_pct = next(
+                            (i for i in range(idx_iva + 1, limite) if encabezado[i].strip() == '%'),
+                            None
+                        )
                     if idx_pct is None:
                         idx_pct = next((i for i, c in enumerate(encabezado) if c.strip() == '%'), None)
 
                     if idx_iva is None or idx_pct is None:
                         continue
 
-                    # Sumar IVA por tarifa
+                    # Columnas para la base (todas opcionales, con fallback)
+                    idx_cant = next((i for i, c in enumerate(encabezado) if 'CANT' in c), None)
+                    idx_precio_venta = next((i for i, c in enumerate(encabezado) if 'PRECIO UNITARIO' in c and 'VENTA' in c), None)
+                    idx_precio = next((i for i, c in enumerate(encabezado) if 'PRECIO UNITARIO' in c and 'VENTA' not in c), None)
+                    idx_desc = next((i for i, c in enumerate(encabezado) if 'DESCUENTO' in c), None)
+                    idx_recargo = next((i for i, c in enumerate(encabezado) if 'RECARGO' in c), None)
+
                     for fila in tabla[datos_inicio:]:
                         if not fila or len(fila) <= max(idx_iva, idx_pct):
                             continue
                         try:
                             val_iva = self.limpiar_monto(str(fila[idx_iva] or ''))
                             val_pct = self.limpiar_monto(str(fila[idx_pct] or ''))
-                            if val_iva <= 0:
-                                continue
-                            if abs(val_pct - 19) < 1:
-                                iva_19 += val_iva
-                                encontrado = True
-                            elif abs(val_pct - 5) < 1:
-                                iva_5 += val_iva
-                                encontrado = True
                         except Exception:
                             continue
+
+                        def _celda(idx):
+                            return self.limpiar_monto(str(fila[idx] or '')) if idx is not None and idx < len(fila) else None
+
+                        cantidad = _celda(idx_cant)
+                        precio_venta = _celda(idx_precio_venta)
+                        precio_unit = _celda(idx_precio)
+                        descuento = _celda(idx_desc) or 0
+                        recargo = _celda(idx_recargo) or 0
+
+                        base_linea = None
+                        if cantidad is not None and precio_unit is not None:
+                            base_linea = (precio_unit * cantidad) - descuento + recargo
+                        elif cantidad is not None and precio_venta is not None:
+                            base_linea = precio_venta * cantidad
+
+                        # Cruce de validación: si ambas columnas están presentes y
+                        # discrepan, "Precio unitario de venta" probablemente no es
+                        # neto de IVA en esta plantilla — alertar, no usarla en silencio.
+                        if cantidad is not None and precio_unit is not None and precio_venta is not None:
+                            base_sustractiva = (precio_unit * cantidad) - descuento + recargo
+                            base_venta = precio_venta * cantidad
+                            if abs(base_venta - base_sustractiva) > 3:
+                                log(99, f"⚠️ 'Precio unitario de venta'×Cantidad ({base_venta:,.0f}) "
+                                        f"≠ Precio unitario×Cantidad−Descuento+Recargo ({base_sustractiva:,.0f}) "
+                                        f"en factura {datos.get('Numero_Factura', '?')} — revisar si esa "
+                                        f"columna incluye IVA. Fila: {fila}", "WARN")
+
+                        if val_iva <= 0 and (base_linea is None or base_linea <= 0):
+                            continue
+
+                        if abs(val_pct - 19) < 1:
+                            iva_19 += val_iva
+                            if base_linea is not None: base_19 += base_linea
+                            encontrado = True
+                        elif abs(val_pct - 5) < 1:
+                            iva_5 += val_iva
+                            if base_linea is not None: base_5 += base_linea
+                            encontrado = True
+                        elif base_linea is not None and base_linea > 0:
+                            # Sin IVA (0/blank): exento y excluido no se distinguen desde
+                            # el PDF (solo el XML lo permite) — un solo balde por ahora.
+                            base_0 += base_linea
+                            encontrado = True
+
+                        if base_linea is None:
+                            filas_debug.append(fila)
 
             except Exception:
                 continue
 
+        datos['_iva_tabla_encontrada'] = encontrado
+
         if encontrado:
             datos['IVA_19'] = self._validar_monto(iva_19)
             datos['IVA_5']  = self._validar_monto(iva_5)
-            log(99, f"✓ IVA tabla: 19%={iva_19:,.0f} / 5%={iva_5:,.0f}", "DEBUG")
+            datos['Base_19'] = self._validar_monto(base_19)
+            datos['Base_5']  = self._validar_monto(base_5)
+            datos['Base_0']  = self._validar_monto(base_0)
+            datos['Total_Base'] = self._validar_monto(base_19 + base_5 + base_0)
+            log(99, f"✓ IVA tabla: 19%={iva_19:,.0f} (base {base_19:,.0f}) / "
+                    f"5%={iva_5:,.0f} (base {base_5:,.0f}) / base 0%={base_0:,.0f}", "DEBUG")
+
+        for fila in filas_debug:
+            log(99, f"⚠️ Fila de 'Detalles de Productos' sin Cantidad/Precio detectable "
+                    f"(Factura {datos.get('Numero_Factura', '?')}): {fila}", "WARN")
+
+    def _calcular_cuadre_iva(self, datos):
+        """
+        Verifica el dato ya extraído (NO recalcula la base ni el IVA):
+          1) Total_Base (suma de bases por tarifa) debe cuadrar con el
+             Subtotal reportado en 'Datos Totales'.
+          2) Por cada tarifa con base > 0, base × tarifa% debe cuadrar con
+             el valor de IVA de esa tarifa ya sumado desde la tabla.
+
+        Un descuento/recargo GLOBAL (bloque Totales, no atado a una tarifa)
+        hace que 1) no cuadre exacto — es intencional: se marca 'Revisar'
+        en vez de repartir el ajuste a la fuerza entre tarifas.
+        """
+        if not datos.get('_iva_tabla_encontrada'):
+            datos['Cuadre_IVA'] = ''  # sin tabla de detalle, nada que verificar
+            return
+
+        TOLERANCIA = 3  # pesos — margen de redondeo esperado
+
+        problemas = []
+
+        subtotal = datos.get('Subtotal', 0)
+        total_base = datos.get('Total_Base', 0)
+        if subtotal and abs(total_base - subtotal) > TOLERANCIA:
+            problemas.append(f"Total Base ({total_base:,.0f}) ≠ Subtotal ({subtotal:,.0f})")
+
+        if datos.get('Base_19', 0) > 0:
+            esperado = datos['Base_19'] * 0.19
+            if abs(esperado - datos.get('IVA_19', 0)) > TOLERANCIA:
+                problemas.append(f"Base 19% × 19% ({esperado:,.0f}) ≠ IVA 19% ({datos.get('IVA_19', 0):,.0f})")
+
+        if datos.get('Base_5', 0) > 0:
+            esperado = datos['Base_5'] * 0.05
+            if abs(esperado - datos.get('IVA_5', 0)) > TOLERANCIA:
+                problemas.append(f"Base 5% × 5% ({esperado:,.0f}) ≠ IVA 5% ({datos.get('IVA_5', 0):,.0f})")
+
+        if problemas:
+            datos['Cuadre_IVA'] = 'Revisar'
+            log(99, f"⚠️ Cuadre IVA a revisar (Factura {datos.get('Numero_Factura', '?')}): "
+                    + " | ".join(problemas), "WARN")
+        else:
+            datos['Cuadre_IVA'] = 'OK'
 
     def _extraer_totales(self, datos, texto):
         """
