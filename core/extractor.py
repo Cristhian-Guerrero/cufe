@@ -1,8 +1,20 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
-v7.8.0 - Fix base gravable incompleta en facturas multipágina
+v7.9.0 - Fix redondeo en céntimos al desambiguar columna de precio neta
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v7.9.0 (fix redondeo en céntimos, sobre v7.8.0):
+La v7.8.0 derivaba la base de líneas gravadas como IVA ÷ % — exacta en
+teoría, pero el IVA del PDF YA viene redondeado a 2 decimales, así que
+dividirlo de vuelta no reproducía el valor literal impreso en "Precio
+unitario"/"Precio unitario de venta" (arrastraba 2-5 céntimos de ruido).
+Corregido: la base SIEMPRE se toma literal de la columna de precio
+(Precio unitario×Cantidad−Descuento+Recargo, o Precio unitario de
+venta×Cantidad) — nunca de una división. IVA ÷ % se usa solo como
+referencia interna para elegir cuál de las dos columnas es la neta cuando
+ambas están presentes y discrepan (plantillas donde "Precio unitario"
+incluye IVA), sin usar el valor derivado como base final.
 
 CAMBIOS v7.8.0 (fix bug base incompleta en facturas multipágina):
 1. _extraer_iva_tabla() recuerda el layout de columnas de "Detalles de
@@ -707,36 +719,51 @@ class ExtractorPDF:
                         descuento = _celda(idx_desc) or 0
                         recargo = _celda(idx_recargo) or 0
 
-                        base_linea = None
-                        if val_pct > 0 and val_iva > 0:
-                            # PRIORIDAD para líneas gravadas: derivar la base del
-                            # IVA ya reportado por línea (Base = IVA ÷ %). Es
-                            # matemáticamente exacta por construcción — no depende
-                            # de adivinar si "Precio unitario" o "Precio unitario
-                            # de venta" es la columna neta, algo que varía entre
-                            # plantillas (confirmado con un caso real donde
-                            # "Precio unitario" traía el valor CON IVA incluido
-                            # y "de venta" era el neto — al revés de lo asumido
-                            # antes).
-                            base_linea = val_iva / (val_pct / 100.0)
-                        elif cantidad is not None and precio_unit is not None:
-                            base_linea = (precio_unit * cantidad) - descuento + recargo
-                        elif cantidad is not None and precio_venta is not None:
-                            base_linea = precio_venta * cantidad
-
-                        # Cruce de validación informativo: si ambas columnas de
-                        # precio están presentes y discrepan entre sí, una de
-                        # las dos probablemente incluye IVA en esta plantilla —
-                        # no se usa para decidir la base (eso ya lo resuelve la
-                        # derivación desde IVA arriba), solo se deja registrado.
-                        if cantidad is not None and precio_unit is not None and precio_venta is not None:
-                            base_sustractiva = (precio_unit * cantidad) - descuento + recargo
+                        # Candidatos de base tomados LITERAL de las columnas de
+                        # precio (nunca se recalculan a partir del IVA — ese
+                        # valor ya viene redondeado a 2 decimales en el PDF, y
+                        # dividirlo entre la tarifa arrastra ese redondeo en
+                        # vez de reproducir el valor exacto impreso).
+                        base_unit = None
+                        if cantidad is not None and precio_unit is not None:
+                            base_unit = (precio_unit * cantidad) - descuento + recargo
+                        base_venta = None
+                        if cantidad is not None and precio_venta is not None:
                             base_venta = precio_venta * cantidad
-                            if abs(base_venta - base_sustractiva) > 3:
+
+                        # Valor derivado del IVA — SOLO como referencia para
+                        # decidir cuál columna de precio es la neta cuando hay
+                        # ambigüedad; nunca se usa como base final (introduce
+                        # redondeo, ver arriba).
+                        base_ref = (val_iva / (val_pct / 100.0)) if (val_pct > 0 and val_iva > 0) else None
+
+                        if base_unit is not None and base_venta is not None:
+                            if abs(base_venta - base_unit) > 3:
+                                # Discrepan: una de las dos columnas incluye IVA
+                                # en esta plantilla (varía entre facturas) — se
+                                # usa la referencia del IVA solo para elegir
+                                # cuál de las DOS es la neta, conservando su
+                                # valor literal (exacto al centavo del PDF).
+                                if base_ref is not None:
+                                    base_linea = base_venta if abs(base_venta - base_ref) < abs(base_unit - base_ref) else base_unit
+                                else:
+                                    base_linea = base_unit
                                 log(99, f"⚠️ 'Precio unitario de venta'×Cantidad ({base_venta:,.0f}) "
-                                        f"≠ Precio unitario×Cantidad−Descuento+Recargo ({base_sustractiva:,.0f}) "
+                                        f"≠ Precio unitario×Cantidad−Descuento+Recargo ({base_unit:,.0f}) "
                                         f"en factura {datos.get('Numero_Factura', '?')} — una de las dos "
-                                        f"columnas de precio incluye IVA en esta plantilla. Fila: {fila}", "WARN")
+                                        f"columnas de precio incluye IVA en esta plantilla; se tomó "
+                                        f"{base_linea:,.0f} por ser la más cercana al IVA÷% reportado. "
+                                        f"Fila: {fila}", "WARN")
+                            else:
+                                base_linea = base_unit
+                        elif base_unit is not None:
+                            base_linea = base_unit
+                        elif base_venta is not None:
+                            base_linea = base_venta
+                        elif base_ref is not None:
+                            base_linea = base_ref
+                        else:
+                            base_linea = None
 
                         if val_iva <= 0 and (base_linea is None or base_linea <= 0):
                             continue
