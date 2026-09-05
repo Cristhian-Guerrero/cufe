@@ -1,8 +1,27 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
-v7.7.0 - Base gravable por tarifa (Base_19/Base_5/Base_0) + Cuadre IVA
+v7.8.0 - Fix base gravable incompleta en facturas multipágina
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v7.8.0 (fix bug base incompleta en facturas multipágina):
+1. _extraer_iva_tabla() recuerda el layout de columnas de "Detalles de
+   Productos" entre páginas. Antes, si la tabla ocupaba varias páginas, las
+   páginas de continuación (solo filas de datos, sin repetir el encabezado
+   "IVA"/"%") se descartaban COMPLETAS — perdiendo toda su base gravable.
+   Ahora se reutiliza el encabezado de la última tabla de detalles vista,
+   aplicado a tablas siguientes con igual número de columnas.
+2. Base por línea gravada (5%/19%): PRIORIDAD a derivarla del IVA ya
+   reportado en la fila (Base = IVA ÷ %) — exacta por construcción, no
+   depende de adivinar cuál columna de precio es neta. Se detectó un caso
+   real donde "Precio unitario" traía el valor CON IVA incluido y "Precio
+   unitario de venta" era el neto (al revés de lo asumido en v7.7.0). El
+   cálculo por Precio unitario × Cantidad − Descuento + Recargo queda como
+   respaldo solo para líneas al 0% (exento/excluido, sin IVA del cual
+   derivar).
+3. Log de diagnóstico: cuenta y reporta cuántas filas de "Detalles de
+   Productos" se leyeron y en cuántas páginas, para poder verificar contra
+   el número real de líneas de la factura.
 
 CAMBIOS v7.7.0:
 1. _extraer_iva_tabla() ahora también calcula la base gravable por línea
@@ -586,6 +605,16 @@ class ExtractorPDF:
         base_19 = base_5 = base_0 = 0.0
         encontrado = False
         filas_debug = []
+        total_filas_leidas = 0
+        paginas_con_filas = 0
+
+        # Se recuerda el layout de columnas de la ÚLTIMA tabla "Detalles de
+        # Productos" encontrada. Cuando esa tabla ocupa varias páginas, el
+        # encabezado ("IVA"/"%") solo aparece en la página donde inicia — las
+        # páginas de continuación solo traen filas de datos. Sin este layout
+        # recordado, esas tablas se descartaban completas (bug: base
+        # incompleta en facturas largas/multipágina).
+        layout = None  # dict con idx_iva, idx_pct, idx_cant, idx_precio_venta, idx_precio, idx_desc, idx_recargo, num_cols
 
         for pagina in paginas:
             try:
@@ -593,8 +622,10 @@ class ExtractorPDF:
                 if not tablas:
                     continue
 
+                filas_pagina = 0
+
                 for tabla in tablas:
-                    if not tabla or len(tabla) < 2:
+                    if not tabla or len(tabla) < 1:
                         continue
 
                     # Buscar fila de encabezado que contenga "IVA" y "%"
@@ -609,35 +640,56 @@ class ExtractorPDF:
                             datos_inicio = i + 1
                             break
 
-                    if encabezado is None:
+                    if encabezado is not None:
+                        # Índice de la columna IVA (valor)
+                        idx_iva = next((i for i, c in enumerate(encabezado) if 'IVA' in c and '%' not in c), None)
+                        idx_inc = next((i for i, c in enumerate(encabezado) if c == 'INC'), None)
+
+                        # % de IVA: primer "%" DESPUÉS de IVA y ANTES de INC (nunca el de INC)
+                        idx_pct = None
+                        if idx_iva is not None:
+                            limite = idx_inc if (idx_inc is not None and idx_inc > idx_iva) else len(encabezado)
+                            idx_pct = next(
+                                (i for i in range(idx_iva + 1, limite) if encabezado[i].strip() == '%'),
+                                None
+                            )
+                        if idx_pct is None:
+                            idx_pct = next((i for i, c in enumerate(encabezado) if c.strip() == '%'), None)
+
+                        if idx_iva is None or idx_pct is None:
+                            continue
+
+                        layout = {
+                            'idx_iva': idx_iva,
+                            'idx_pct': idx_pct,
+                            'idx_cant': next((i for i, c in enumerate(encabezado) if 'CANT' in c), None),
+                            'idx_precio_venta': next((i for i, c in enumerate(encabezado) if 'PRECIO UNITARIO' in c and 'VENTA' in c), None),
+                            'idx_precio': next((i for i, c in enumerate(encabezado) if 'PRECIO UNITARIO' in c and 'VENTA' not in c), None),
+                            'idx_desc': next((i for i, c in enumerate(encabezado) if 'DESCUENTO' in c), None),
+                            'idx_recargo': next((i for i, c in enumerate(encabezado) if 'RECARGO' in c), None),
+                            'num_cols': len(encabezado),
+                        }
+                        filas_datos = tabla[datos_inicio:]
+                    elif layout is not None and len(tabla[0] or []) == layout['num_cols']:
+                        # Tabla de continuación (misma cantidad de columnas que
+                        # la tabla de detalles, sin fila de encabezado propia):
+                        # se asume que es la misma tabla partida por salto de
+                        # página y se procesa completa como filas de datos.
+                        filas_datos = tabla
+                    else:
+                        # No es continuación de "Detalles de Productos"
+                        # (p.ej. tablas de Subtotal/Anticipos/Retenciones).
                         continue
 
-                    # Índice de la columna IVA (valor)
-                    idx_iva = next((i for i, c in enumerate(encabezado) if 'IVA' in c and '%' not in c), None)
-                    idx_inc = next((i for i, c in enumerate(encabezado) if c == 'INC'), None)
+                    idx_iva = layout['idx_iva']
+                    idx_pct = layout['idx_pct']
+                    idx_cant = layout['idx_cant']
+                    idx_precio_venta = layout['idx_precio_venta']
+                    idx_precio = layout['idx_precio']
+                    idx_desc = layout['idx_desc']
+                    idx_recargo = layout['idx_recargo']
 
-                    # % de IVA: primer "%" DESPUÉS de IVA y ANTES de INC (nunca el de INC)
-                    idx_pct = None
-                    if idx_iva is not None:
-                        limite = idx_inc if (idx_inc is not None and idx_inc > idx_iva) else len(encabezado)
-                        idx_pct = next(
-                            (i for i in range(idx_iva + 1, limite) if encabezado[i].strip() == '%'),
-                            None
-                        )
-                    if idx_pct is None:
-                        idx_pct = next((i for i, c in enumerate(encabezado) if c.strip() == '%'), None)
-
-                    if idx_iva is None or idx_pct is None:
-                        continue
-
-                    # Columnas para la base (todas opcionales, con fallback)
-                    idx_cant = next((i for i, c in enumerate(encabezado) if 'CANT' in c), None)
-                    idx_precio_venta = next((i for i, c in enumerate(encabezado) if 'PRECIO UNITARIO' in c and 'VENTA' in c), None)
-                    idx_precio = next((i for i, c in enumerate(encabezado) if 'PRECIO UNITARIO' in c and 'VENTA' not in c), None)
-                    idx_desc = next((i for i, c in enumerate(encabezado) if 'DESCUENTO' in c), None)
-                    idx_recargo = next((i for i, c in enumerate(encabezado) if 'RECARGO' in c), None)
-
-                    for fila in tabla[datos_inicio:]:
+                    for fila in filas_datos:
                         if not fila or len(fila) <= max(idx_iva, idx_pct):
                             continue
                         try:
@@ -656,22 +708,35 @@ class ExtractorPDF:
                         recargo = _celda(idx_recargo) or 0
 
                         base_linea = None
-                        if cantidad is not None and precio_unit is not None:
+                        if val_pct > 0 and val_iva > 0:
+                            # PRIORIDAD para líneas gravadas: derivar la base del
+                            # IVA ya reportado por línea (Base = IVA ÷ %). Es
+                            # matemáticamente exacta por construcción — no depende
+                            # de adivinar si "Precio unitario" o "Precio unitario
+                            # de venta" es la columna neta, algo que varía entre
+                            # plantillas (confirmado con un caso real donde
+                            # "Precio unitario" traía el valor CON IVA incluido
+                            # y "de venta" era el neto — al revés de lo asumido
+                            # antes).
+                            base_linea = val_iva / (val_pct / 100.0)
+                        elif cantidad is not None and precio_unit is not None:
                             base_linea = (precio_unit * cantidad) - descuento + recargo
                         elif cantidad is not None and precio_venta is not None:
                             base_linea = precio_venta * cantidad
 
-                        # Cruce de validación: si ambas columnas están presentes y
-                        # discrepan, "Precio unitario de venta" probablemente no es
-                        # neto de IVA en esta plantilla — alertar, no usarla en silencio.
+                        # Cruce de validación informativo: si ambas columnas de
+                        # precio están presentes y discrepan entre sí, una de
+                        # las dos probablemente incluye IVA en esta plantilla —
+                        # no se usa para decidir la base (eso ya lo resuelve la
+                        # derivación desde IVA arriba), solo se deja registrado.
                         if cantidad is not None and precio_unit is not None and precio_venta is not None:
                             base_sustractiva = (precio_unit * cantidad) - descuento + recargo
                             base_venta = precio_venta * cantidad
                             if abs(base_venta - base_sustractiva) > 3:
                                 log(99, f"⚠️ 'Precio unitario de venta'×Cantidad ({base_venta:,.0f}) "
                                         f"≠ Precio unitario×Cantidad−Descuento+Recargo ({base_sustractiva:,.0f}) "
-                                        f"en factura {datos.get('Numero_Factura', '?')} — revisar si esa "
-                                        f"columna incluye IVA. Fila: {fila}", "WARN")
+                                        f"en factura {datos.get('Numero_Factura', '?')} — una de las dos "
+                                        f"columnas de precio incluye IVA en esta plantilla. Fila: {fila}", "WARN")
 
                         if val_iva <= 0 and (base_linea is None or base_linea <= 0):
                             continue
@@ -693,6 +758,12 @@ class ExtractorPDF:
                         if base_linea is None:
                             filas_debug.append(fila)
 
+                        total_filas_leidas += 1
+                        filas_pagina += 1
+
+                if filas_pagina:
+                    paginas_con_filas += 1
+
             except Exception:
                 continue
 
@@ -705,6 +776,9 @@ class ExtractorPDF:
             datos['Base_5']  = self._validar_monto(base_5)
             datos['Base_0']  = self._validar_monto(base_0)
             datos['Total_Base'] = self._validar_monto(base_19 + base_5 + base_0)
+            log(99, f"✓ Detalles de Productos: {total_filas_leidas} filas leídas "
+                    f"en {paginas_con_filas} página(s) — factura "
+                    f"{datos.get('Numero_Factura', '?')}", "DEBUG")
             log(99, f"✓ IVA tabla: 19%={iva_19:,.0f} (base {base_19:,.0f}) / "
                     f"5%={iva_5:,.0f} (base {base_5:,.0f}) / base 0%={base_0:,.0f}", "DEBUG")
 
