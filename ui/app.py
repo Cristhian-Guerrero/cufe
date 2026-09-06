@@ -1,5 +1,5 @@
 """
-Sistema de Consulta CUFE DIAN - v5.2.0
+Sistema de Consulta CUFE DIAN - v5.4.1
 Diseño Limpio y Moderno
 © C. Guerrero | A.S. Contadores & Asesores SAS
 """
@@ -33,7 +33,7 @@ except ImportError as e:
 
 APP = {
     'title': 'CUFE DIAN - A.S. Contadores & Asesores',
-    'version': '5.2.0',
+    'version': '5.4.1',
     'company': 'A.S. Contadores & Asesores SAS',
     'location': 'Pasto, Nariño',
     'dev': '© C. Guerrero',
