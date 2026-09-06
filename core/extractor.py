@@ -1,8 +1,25 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
 EXTRACTOR DE DATOS PDF - CUFE DIAN AUTOMATION (MULTI-FORMATO)
-v7.9.0 - Fix redondeo en céntimos al desambiguar columna de precio neta
+v7.10.0 - Fix raíz: "Precio unitario de venta" es total de línea, no unitario
 ═══════════════════════════════════════════════════════════════════════════
+
+CAMBIOS v7.10.0 (fix raíz sobre v7.9.0, verificado con PDF real FE-11275):
+Se confirmó con el PDF real de FE-11275 (NIT 5595769) que pdfplumber lee
+las páginas de continuación (2 y 3) LIMPIAS — no había corrupción de
+columnas como se sospechaba. El bug estaba en la fórmula:
+1. "Precio unitario de venta" pese al nombre YA es el TOTAL neto de la
+   línea (base gravable), no un precio por unidad — v7.9.0 la multiplicaba
+   por Cantidad, inflando la base en facturas con líneas de cantidad>1
+   (ej. 10 unidades → base 10 veces mayor). Ahora se usa literal.
+2. "Precio unitario" sí es genuinamente por unidad, pero viene CON IVA
+   incluido (bruto) — Precio unitario×Cantidad−Descuento+Recargo da el
+   BRUTO de línea, no la base. Ahora se le resta el IVA ya reportado
+   (literal del PDF, sin dividir entre la tarifa) para obtener el neto.
+Verificado exacto al centavo en FE-11275 real: Total_Base=1.888.890,47
+(esperado 1.888.890,48, 1 céntimo de ruido acumulado en 48 líneas),
+Base_19%=1.541.428,56 (esperado ~1.541.428), Base_0%=262.700,00 (incluye
+todas las líneas 0% de la factura, no solo gasolina/thinner).
 
 CAMBIOS v7.9.0 (fix redondeo en céntimos, sobre v7.8.0):
 La v7.8.0 derivaba la base de líneas gravadas como IVA ÷ % — exacta en
@@ -600,13 +617,16 @@ class ExtractorPDF:
         bajo el super-encabezado "IMPUESTOS"). Se toma el "%" que aparece
         DESPUÉS de la columna IVA y ANTES de INC — nunca el de INC.
 
-        Base por línea: PRIORIDAD a Precio unitario × Cantidad − Descuento +
-        Recargo (fórmula explícita, sin ambigüedad sobre si incluye IVA).
-        Solo cae a "Precio unitario de venta" × Cantidad si Precio unitario
-        no está disponible en la tabla. Si ambas columnas están presentes y
-        difieren más allá de la tolerancia, se loguea como advertencia —
-        eso indicaría que "Precio unitario de venta" no es neto de IVA en
-        esta plantilla y NO debe usarse como fuente de base en el futuro.
+        Base por línea: PRIORIDAD a "Precio unitario de venta" — confirmado
+        con PDF real (FE-11275) que, pese al nombre, esa columna YA es el
+        TOTAL neto de la línea (no un precio por unidad): se usa literal,
+        SIN multiplicar por Cantidad. Fallback si falta esa columna:
+        (Precio unitario × Cantidad − Descuento + Recargo) − IVA reportado
+        — Precio unitario sí es por unidad pero viene CON IVA incluido, y
+        restarle el IVA (valor literal del PDF, sin dividir entre la
+        tarifa) reproduce el mismo neto exacto al centavo. IVA÷% se usa
+        solo como referencia para elegir entre candidatos si ambos están
+        presentes y discrepan, nunca como base final.
         Si no hay columnas suficientes para ninguna fórmula, la fila queda
         sin base y se loguea cruda para diagnóstico.
 
@@ -646,10 +666,29 @@ class ExtractorPDF:
                     for i, fila in enumerate(tabla):
                         if fila is None:
                             continue
-                        celdas = [str(c or '').strip().upper() for c in fila]
+                        # Normaliza saltos de línea a espacio: el PDF envuelve
+                        # etiquetas de encabezado en varias líneas (ej. "Precio\n
+                        # unitario de\nventa") y una comparación por substring
+                        # como 'PRECIO UNITARIO' in c nunca hace match si el
+                        # salto de línea cae justo ahí — bug confirmado con PDF
+                        # real, pasó inadvertido en TODAS las versiones previas.
+                        celdas = [re.sub(r'\s+', ' ', str(c or '')).strip().upper() for c in fila]
                         if any('IVA' in c for c in celdas) and any(c in ('%', 'TARIFA', '% IVA') for c in celdas):
                             encabezado = celdas
                             datos_inicio = i + 1
+                            # El PDF de DIAN usa encabezado en DOS filas: la
+                            # fila con "IVA"/"%"/"INC" (detectada arriba) y,
+                            # justo encima, una fila fusionada con el
+                            # super-título "IMPUESTOS" y, en la MISMA columna
+                            # que queda en blanco en la fila de abajo,
+                            # "Precio unitario de venta". Sin fusionar ambas
+                            # filas, idx_precio_venta nunca se encuentra
+                            # (columna en blanco en la fila con IVA/%).
+                            if i > 0 and tabla[i - 1]:
+                                fila_superior = [re.sub(r'\s+', ' ', str(c or '')).strip().upper() for c in tabla[i - 1]]
+                                for col in range(min(len(encabezado), len(fila_superior))):
+                                    if not encabezado[col] and fila_superior[col]:
+                                        encabezado[col] = fila_superior[col]
                             break
 
                     if encabezado is not None:
@@ -719,17 +758,22 @@ class ExtractorPDF:
                         descuento = _celda(idx_desc) or 0
                         recargo = _celda(idx_recargo) or 0
 
-                        # Candidatos de base tomados LITERAL de las columnas de
-                        # precio (nunca se recalculan a partir del IVA — ese
-                        # valor ya viene redondeado a 2 decimales en el PDF, y
-                        # dividirlo entre la tarifa arrastra ese redondeo en
-                        # vez de reproducir el valor exacto impreso).
+                        # Confirmado con PDF real (factura FE-11275, 2026-09-05):
+                        # pese al nombre "Precio unitario de venta", esa columna
+                        # YA es el TOTAL neto de la línea (base gravable), no un
+                        # precio por unidad — NO se multiplica por Cantidad.
+                        # "Precio unitario" sí es genuinamente por unidad, pero
+                        # viene CON IVA incluido (bruto); Precio unitario×Cantidad
+                        # −Descuento+Recargo da el BRUTO de línea, y restarle el
+                        # IVA ya reportado (valor literal del PDF, sin dividir
+                        # entre la tarifa) da el mismo neto que la columna venta.
+                        # Verificado exacto al centavo en 4 líneas de FE-11275
+                        # con cantidades 1/10/10/13 y tarifas 5%/19%.
                         base_unit = None
                         if cantidad is not None and precio_unit is not None:
-                            base_unit = (precio_unit * cantidad) - descuento + recargo
-                        base_venta = None
-                        if cantidad is not None and precio_venta is not None:
-                            base_venta = precio_venta * cantidad
+                            bruto_linea = (precio_unit * cantidad) - descuento + recargo
+                            base_unit = bruto_linea - val_iva
+                        base_venta = precio_venta
 
                         # Valor derivado del IVA — SOLO como referencia para
                         # decidir cuál columna de precio es la neta cuando hay
@@ -737,29 +781,43 @@ class ExtractorPDF:
                         # redondeo, ver arriba).
                         base_ref = (val_iva / (val_pct / 100.0)) if (val_pct > 0 and val_iva > 0) else None
 
-                        if base_unit is not None and base_venta is not None:
-                            if abs(base_venta - base_unit) > 3:
-                                # Discrepan: una de las dos columnas incluye IVA
-                                # en esta plantilla (varía entre facturas) — se
-                                # usa la referencia del IVA solo para elegir
-                                # cuál de las DOS es la neta, conservando su
-                                # valor literal (exacto al centavo del PDF).
-                                if base_ref is not None:
-                                    base_linea = base_venta if abs(base_venta - base_ref) < abs(base_unit - base_ref) else base_unit
-                                else:
-                                    base_linea = base_unit
-                                log(99, f"⚠️ 'Precio unitario de venta'×Cantidad ({base_venta:,.0f}) "
-                                        f"≠ Precio unitario×Cantidad−Descuento+Recargo ({base_unit:,.0f}) "
-                                        f"en factura {datos.get('Numero_Factura', '?')} — una de las dos "
-                                        f"columnas de precio incluye IVA en esta plantilla; se tomó "
-                                        f"{base_linea:,.0f} por ser la más cercana al IVA÷% reportado. "
+                        # Candidatos disponibles para esta línea (se conserva
+                        # el ORDEN unit-primero para el caso sin referencia:
+                        # mantiene el comportamiento histórico cuando no hay
+                        # IVA con qué comparar, ej. líneas al 0%).
+                        candidatos = []
+                        if base_unit is not None:
+                            candidatos.append(('unit', base_unit))
+                        if base_venta is not None:
+                            candidatos.append(('venta', base_venta))
+
+                        if base_ref is not None and candidatos:
+                            # SIEMPRE se compara contra IVA÷% cuando hay tarifa
+                            # (no solo cuando unit y venta discrepan entre sí):
+                            # una plantilla puede tener "Precio unitario" CON
+                            # IVA en TODAS sus líneas gravadas — ahí unit y
+                            # venta discrepan muchísimo entre sí, pero eso ya
+                            # se detecta igual al comparar cada uno contra la
+                            # referencia, sin necesitar ese chequeo previo.
+                            nombre_elegido, base_linea = min(candidatos, key=lambda t: abs(t[1] - base_ref))
+                            if len(candidatos) > 1:
+                                otro_nombre, otro_valor = next(t for t in candidatos if t[0] != nombre_elegido)
+                                if abs(otro_valor - base_linea) > 3:
+                                    log(99, f"↪ Línea con precio ambiguo en factura "
+                                            f"{datos.get('Numero_Factura', '?')}: se tomó columna "
+                                            f"'{nombre_elegido}' ({base_linea:,.2f}) sobre '{otro_nombre}' "
+                                            f"({otro_valor:,.2f}) por ser la más cercana a IVA÷%="
+                                            f"{base_ref:,.2f} (IVA={val_iva:,.2f}, %={val_pct:g}). "
+                                            f"Fila: {fila}", "WARN")
+                            tolerancia = max(3, abs(base_ref) * 0.02)
+                            if abs(base_linea - base_ref) > tolerancia:
+                                log(99, f"⚠️ Ninguna columna de precio coincide con IVA÷%="
+                                        f"{base_ref:,.2f} en esta línea (unit={base_unit}, "
+                                        f"venta={base_venta}, IVA={val_iva}, %={val_pct}) — factura "
+                                        f"{datos.get('Numero_Factura', '?')}, revisar plantilla/columnas. "
                                         f"Fila: {fila}", "WARN")
-                            else:
-                                base_linea = base_unit
-                        elif base_unit is not None:
-                            base_linea = base_unit
-                        elif base_venta is not None:
-                            base_linea = base_venta
+                        elif candidatos:
+                            base_linea = candidatos[0][1]
                         elif base_ref is not None:
                             base_linea = base_ref
                         else:
